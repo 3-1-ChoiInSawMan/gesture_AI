@@ -1,7 +1,7 @@
-KEYPOINT_DIR = r"D:\수어 영상\01_label\keypoint\01"
-MORPHEME_DIR = r"D:\수어 영상\01_label\morpheme\morpheme\01"
-OUTPUT_NPY_DIR = r"C:\npy_output\keypoints"
-OUTPUT_LABEL_CSV = r"C:\npy_output\labels.csv"
+KEYPOINT_DIR = r"/data/02"
+MORPHEME_DIR = r"/data/mor/02"
+OUTPUT_NPY_DIR = r"/data/npy_output/keypoints"
+OUTPUT_LABEL_CSV = r"/data/npy_output/labels.csv"
 
 ANGLE_FILTER = "_F"
 
