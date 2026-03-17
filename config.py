@@ -1,5 +1,5 @@
-KEYPOINT_DIR = r"/data/02"
-MORPHEME_DIR = r"/data/mor/02"
+KEYPOINT_DIR = r"/문서/data/04"
+MORPHEME_DIR = r"/문서/data/mor/04"
 OUTPUT_NPY_DIR = r"/data/npy_output/keypoints"
 OUTPUT_LABEL_CSV = r"/data/npy_output/labels.csv"
 
