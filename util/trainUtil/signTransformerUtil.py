@@ -25,3 +25,19 @@ class SignTransformer(nn.Module):
         x = self.transformer(x)       # (batch, 120, 256)
         x = x.mean(dim=1)             # (batch, 256)
         return self.classifier(x)     # (batch, 3000)
+    
+
+
+class SimpleClassifier(nn.Module):
+    def __init__(self, input_dim=411*120, num_classes=3000):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, 512),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(512, num_classes)
+        )
+
+    def forward(self, x):              # (batch, 120, 137, 3)
+        x = x.flatten(start_dim=1)     # (batch, 120*411)
+        return self.net(x)
