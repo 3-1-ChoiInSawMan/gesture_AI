@@ -1,0 +1,12 @@
+[project]
+name = "gesture-ai"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.135.1",
+    "faster-whisper>=1.2.1",
+    "openai-whisper>=20250625",
+    "uvicorn[standard]>=0.42.0",
+]
