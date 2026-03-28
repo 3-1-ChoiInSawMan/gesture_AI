@@ -1,10 +1,16 @@
 import os
 import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    ConfusionMatrixDisplay,
+)
+import matplotlib.pyplot as plt
 
 
-def downsample_sequence(seq: np.ndarray, target_len: int = 20) -> np.ndarray:
+def downsample_sequence(seq: np.ndarray, target_len: int = 60) -> np.ndarray:
     """
     seq: (T, D)
     target_len 길이로 다운샘플
@@ -211,6 +217,19 @@ def main():
     clf.fit(X_train, y_train)
 
     y_pred = clf.predict(X_test)
+
+    labels = sorted(set(y))
+    cm = confusion_matrix(y_test, y_pred, labels=labels)
+
+    print("\n[Confusion Matrix]")
+    print(cm)
+
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
+    fig, ax = plt.subplots(figsize=(10, 10))
+    disp.plot(ax=ax, xticks_rotation=45, cmap="Blues", colorbar=False)
+    plt.tight_layout()
+    plt.savefig("confusion_matrix.png", dpi=200, bbox_inches="tight")
+    print("saved: confusion_matrix.png")
 
     print("\n[Evaluation]")
     print("accuracy:", accuracy_score(y_test, y_pred))
