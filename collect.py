@@ -8,113 +8,164 @@ mp_pose = mp.solutions.pose
 mp_drawing = mp.solutions.drawing_utils
 
 
-def extract_hand_keypoints(results_hands):
-    """
-    항상 같은 길이로 반환:
-    - left hand: 21 * 2
-    - right hand: 21 * 2
-    총 84차원
-    """
-    left_hand = np.zeros((21, 2), dtype=np.float32)
-    right_hand = np.zeros((21, 2), dtype=np.float32)
-
-    if results_hands.multi_hand_landmarks and results_hands.multi_handedness:
-        for hand_landmarks, handedness in zip(
-            results_hands.multi_hand_landmarks,
-            results_hands.multi_handedness
-        ):
-            label = handedness.classification[0].label  # "Left" or "Right"
-
-            coords = []
-            for lm in hand_landmarks.landmark:
-                coords.append([lm.x, lm.y])
-            coords = np.array(coords, dtype=np.float32)
-
-            # mediapipe 기준 handedness 사용
-            if label == "Left":
-                left_hand = coords
-            elif label == "Right":
-                right_hand = coords
-
-    return np.concatenate([
-        left_hand.flatten(),
-        right_hand.flatten()
-    ], axis=0)  # (84,)
-
-
-def extract_pose_keypoints(results_pose):
-    """
-    포즈는 어깨 2개만 사용
-    left shoulder = 11, right shoulder = 12
-    총 4차원
-    """
-    pose_vec = np.zeros((2, 2), dtype=np.float32)
-
-    if results_pose.pose_landmarks:
-        l_shoulder = results_pose.pose_landmarks.landmark[11]
-        r_shoulder = results_pose.pose_landmarks.landmark[12]
-
-        pose_vec[0] = [l_shoulder.x, l_shoulder.y]
-        pose_vec[1] = [r_shoulder.x, r_shoulder.y]
-
-    return pose_vec.flatten()  # (4,)
-
-
-def normalize_frame_keypoints(frame_vec):
-    """
-    frame_vec:
-    [left_hand(42), right_hand(42), shoulders(4)] = 총 88차원
-
-    정규화:
-    - 어깨 중앙을 원점으로 이동
-    - 어깨 거리로 스케일 정규화
-    """
-    frame_vec = frame_vec.copy().astype(np.float32)
-
-    hands = frame_vec[:84].reshape(42, 2)
-    shoulders = frame_vec[84:].reshape(2, 2)
-
-    left_sh = shoulders[0]
-    right_sh = shoulders[1]
-
-    center = (left_sh + right_sh) / 2.0
-    shoulder_dist = np.linalg.norm(left_sh - right_sh)
-
-    if shoulder_dist < 1e-6:
-        shoulder_dist = 1.0
-
-    hands = (hands - center) / shoulder_dist
-    shoulders = (shoulders - center) / shoulder_dist
-
-    return np.concatenate([hands.flatten(), shoulders.flatten()], axis=0)
-
-
-def extract_keypoints(results_hands, results_pose):
-    hand_vec = extract_hand_keypoints(results_hands)   # (84,)
-    pose_vec = extract_pose_keypoints(results_pose)    # (4,)
-    frame_vec = np.concatenate([hand_vec, pose_vec], axis=0)  # (88,)
-    frame_vec = normalize_frame_keypoints(frame_vec)
-    return frame_vec.astype(np.float32)
-
-
-def get_next_index(label_dir):
-    existing = [f for f in os.listdir(label_dir) if f.endswith(".npy")]
-    if not existing:
-        return 0
-
+def get_next_index(label_dir: str) -> int:
+    files = [f for f in os.listdir(label_dir) if f.endswith(".npy")]
     nums = []
-    for f in existing:
+    for f in files:
         name = os.path.splitext(f)[0]
         if name.isdigit():
             nums.append(int(name))
-
-    if not nums:
-        return 0
-
-    return max(nums) + 1
+    return max(nums) + 1 if nums else 0
 
 
-def collect_data(label, save_dir="dataset", frames_per_sample=30):
+def extract_shoulders(results_pose):
+    if not results_pose.pose_landmarks:
+        return None
+
+    l = results_pose.pose_landmarks.landmark[11]
+    r = results_pose.pose_landmarks.landmark[12]
+
+    shoulders = np.array([
+        [l.x, l.y],
+        [r.x, r.y],
+    ], dtype=np.float32)
+
+    if not np.isfinite(shoulders).all():
+        return None
+
+    dist = np.linalg.norm(shoulders[0] - shoulders[1])
+    if dist < 1e-6:
+        return None
+
+    return shoulders
+
+
+def extract_hands(results_hands):
+    hands = []
+
+    if not results_hands.multi_hand_landmarks:
+        return hands
+
+    for hand_landmarks in results_hands.multi_hand_landmarks:
+        coords = []
+        for lm in hand_landmarks.landmark:
+            coords.append([lm.x, lm.y])
+
+        coords = np.array(coords, dtype=np.float32)
+
+        if coords.shape == (21, 2) and np.isfinite(coords).all():
+            hands.append(coords)
+
+    return hands
+
+
+def assign_left_right(hands, shoulders):
+    """
+    handedness 대신 x 위치 기준으로 좌/우 배치
+    """
+    left = np.zeros((21, 2), dtype=np.float32)
+    right = np.zeros((21, 2), dtype=np.float32)
+
+    if len(hands) == 0:
+        return left, right, 0
+
+    if len(hands) == 1:
+        hand = hands[0]
+        hand_cx = hand[:, 0].mean()
+        body_cx = shoulders[:, 0].mean()
+
+        if hand_cx < body_cx:
+            left = hand
+        else:
+            right = hand
+        return left, right, 1
+
+    hands = sorted(hands, key=lambda h: h[:, 0].mean())
+    left = hands[0]
+    right = hands[1]
+    return left, right, 2
+
+
+def normalize_frame(left_hand, right_hand, shoulders):
+    center = (shoulders[0] + shoulders[1]) / 2.0
+    shoulder_dist = np.linalg.norm(shoulders[0] - shoulders[1])
+
+    if shoulder_dist < 1e-6:
+        return None
+
+    left_hand = (left_hand - center) / shoulder_dist
+    right_hand = (right_hand - center) / shoulder_dist
+    shoulders = (shoulders - center) / shoulder_dist
+
+    frame_vec = np.concatenate([
+        left_hand.flatten(),   # 42
+        right_hand.flatten(),  # 42
+        shoulders.flatten()    # 4
+    ], axis=0).astype(np.float32)
+
+    return frame_vec  # (88,)
+
+
+def is_valid_frame(frame_vec):
+    if frame_vec is None:
+        return False
+
+    if frame_vec.shape != (88,):
+        return False
+
+    if not np.isfinite(frame_vec).all():
+        return False
+
+    pts = frame_vec.reshape(44, 2)
+
+    uniq_all = np.unique(np.round(pts, 5), axis=0)
+    if len(uniq_all) < 10:
+        return False
+
+    left = pts[:21]
+    right = pts[21:42]
+    shoulders = pts[42:44]
+
+    # 어깨 두 점이 너무 붙어 있으면 이상
+    if np.linalg.norm(shoulders[0] - shoulders[1]) < 0.1:
+        return False
+
+    left_uniq = len(np.unique(np.round(left, 5), axis=0))
+    right_uniq = len(np.unique(np.round(right, 5), axis=0))
+
+    # 두 손 중 하나라도 살아있어야 함
+    if max(left_uniq, right_uniq) < 5:
+        return False
+
+    return True
+
+
+def is_valid_sequence(sequence, min_valid_ratio=0.9):
+    if len(sequence) == 0:
+        return False
+
+    valid = sum(is_valid_frame(f) for f in sequence)
+    return valid >= int(len(sequence) * min_valid_ratio)
+
+
+def draw_text(img, text, y=30, color=(0, 255, 0)):
+    cv2.putText(
+        img,
+        text,
+        (10, y),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        color,
+        2
+    )
+
+
+def collect_data(
+    label: str,
+    save_dir: str = "dataset",
+    frames_per_sample: int = 60,
+    max_attempt_frames: int = 300,
+):
     label_dir = os.path.join(save_dir, label)
     os.makedirs(label_dir, exist_ok=True)
 
@@ -124,41 +175,38 @@ def collect_data(label, save_dir="dataset", frames_per_sample=30):
     if not cap.isOpened():
         raise RuntimeError("웹캠을 열 수 없습니다.")
 
-    print(f"\n[INFO] label = {label}")
-    print("[INFO] space: 녹화 시작")
-    print("[INFO] q    : 종료\n")
+    print(f"[INFO] label = {label}")
+    print("[INFO] SPACE: 녹화 시작")
+    print("[INFO] Q    : 종료")
 
     with mp_hands.Hands(
         static_image_mode=False,
         max_num_hands=2,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5
-    ) as hands, mp_pose.Pose(
+        min_detection_confidence=0.6,
+        min_tracking_confidence=0.6,
+    ) as hands_model, mp_pose.Pose(
         static_image_mode=False,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5
-    ) as pose:
+        min_detection_confidence=0.6,
+        min_tracking_confidence=0.6,
+    ) as pose_model:
 
         while True:
             ret, frame = cap.read()
             if not ret:
-                print("[ERROR] 프레임을 읽을 수 없습니다.")
+                print("[ERROR] 프레임 읽기 실패")
                 break
 
-            frame = cv2.flip(frame, 1)
-            view = frame.copy()
+            # 추출은 원본
+            input_frame = frame.copy()
+            # 보기는 좌우반전
+            view_frame = cv2.flip(frame, 1)
 
-            cv2.putText(
-                view,
-                f"label={label} next={sample_idx:03d} | SPACE: record | Q: quit",
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 0),
-                2
+            draw_text(
+                view_frame,
+                f"label={label} next={sample_idx:03d} | SPACE: record | Q: quit"
             )
 
-            cv2.imshow("collect", view)
+            cv2.imshow("collect", view_frame)
             key = cv2.waitKey(1) & 0xFF
 
             if key == ord("q"):
@@ -168,78 +216,114 @@ def collect_data(label, save_dir="dataset", frames_per_sample=30):
                 print(f"[INFO] recording sample {sample_idx:03d} ...")
 
                 sequence = []
+                attempts = 0
 
-                for frame_no in range(frames_per_sample):
+                while len(sequence) < frames_per_sample and attempts < max_attempt_frames:
+                    attempts += 1
+
                     ret, frame = cap.read()
                     if not ret:
-                        print("[ERROR] 녹화 중 프레임 읽기 실패")
-                        break
+                        continue
 
-                    frame = cv2.flip(frame, 1)
-                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    input_frame = frame.copy()
+                    show_frame = cv2.flip(frame, 1)
 
-                    results_hands = hands.process(rgb)
-                    results_pose = pose.process(rgb)
+                    rgb = cv2.cvtColor(input_frame, cv2.COLOR_BGR2RGB)
 
-                    keypoints = extract_keypoints(results_hands, results_pose)
-                    sequence.append(keypoints)
+                    results_hands = hands_model.process(rgb)
+                    results_pose = pose_model.process(rgb)
 
-                    draw_frame = frame.copy()
+                    shoulders = extract_shoulders(results_pose)
+                    hands = extract_hands(results_hands)
+
+                    # 손 0개면 폐기
+                    if shoulders is None or len(hands) == 0:
+                        draw_text(
+                            show_frame,
+                            f"SKIP | shoulders={shoulders is not None} hands={len(hands)}",
+                            color=(0, 0, 255),
+                        )
+                        cv2.imshow("collect", show_frame)
+                        if cv2.waitKey(1) & 0xFF == ord("q"):
+                            cap.release()
+                            cv2.destroyAllWindows()
+                            return
+                        continue
+
+                    left_hand, right_hand, hand_count = assign_left_right(hands, shoulders)
+                    frame_vec = normalize_frame(left_hand, right_hand, shoulders)
+
+                    if not is_valid_frame(frame_vec):
+                        draw_text(
+                            show_frame,
+                            f"INVALID | hands={hand_count}",
+                            color=(0, 0, 255),
+                        )
+                        cv2.imshow("collect", show_frame)
+                        if cv2.waitKey(1) & 0xFF == ord("q"):
+                            cap.release()
+                            cv2.destroyAllWindows()
+                            return
+                        continue
+
+                    sequence.append(frame_vec)
 
                     if results_hands.multi_hand_landmarks:
                         for hand_landmarks in results_hands.multi_hand_landmarks:
                             mp_drawing.draw_landmarks(
-                                draw_frame,
+                                show_frame,
                                 hand_landmarks,
                                 mp_hands.HAND_CONNECTIONS
                             )
 
                     if results_pose.pose_landmarks:
                         mp_drawing.draw_landmarks(
-                            draw_frame,
+                            show_frame,
                             results_pose.pose_landmarks,
                             mp_pose.POSE_CONNECTIONS
                         )
 
-                    cv2.putText(
-                        draw_frame,
-                        f"REC {label} {sample_idx:03d} frame {frame_no + 1}/{frames_per_sample}",
-                        (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        (0, 0, 255),
-                        2
+                    draw_text(
+                        show_frame,
+                        f"REC {label} {sample_idx:03d} | valid {len(sequence)}/{frames_per_sample} | attempt {attempts}/{max_attempt_frames}",
+                        color=(0, 255, 255),
                     )
 
-                    cv2.imshow("collect", draw_frame)
+                    cv2.imshow("collect", show_frame)
 
-                    key2 = cv2.waitKey(1) & 0xFF
-                    if key2 == ord("q"):
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
                         cap.release()
                         cv2.destroyAllWindows()
                         return
 
+                if len(sequence) != frames_per_sample:
+                    print("[WARN] 유효 프레임 부족 -> 저장 안 함")
+                    continue
+
                 sequence = np.array(sequence, dtype=np.float32)
 
-                if len(sequence) == frames_per_sample:
-                    save_path = os.path.join(label_dir, f"{sample_idx:03d}.npy")
-                    np.save(save_path, sequence)
-                    print(f"[SAVED] {save_path} | shape={sequence.shape}")
-                    sample_idx += 1
-                else:
-                    print("[WARN] 녹화 길이가 부족해서 저장하지 않았습니다.")
+                if not is_valid_sequence(sequence, min_valid_ratio=0.9):
+                    print("[WARN] 시퀀스 품질 낮음 -> 저장 안 함")
+                    continue
+
+                save_path = os.path.join(label_dir, f"{sample_idx:03d}.npy")
+                np.save(save_path, sequence)
+
+                print(f"[SAVED] {save_path} | shape={sequence.shape}")
+                sample_idx += 1
 
     cap.release()
     cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
-    label = input("수집할 라벨명을 입력하세요: ").strip()
+    label = input("수집할 라벨명 입력: ").strip()
     if not label:
-        raise ValueError("라벨명이 비어 있습니다.")
+        raise ValueError("라벨명이 비어 있음")
 
     collect_data(
         label=label,
         save_dir="dataset",
-        frames_per_sample=60
+        frames_per_sample=60,
+        max_attempt_frames=300,
     )
