@@ -212,105 +212,110 @@ def collect_data(
             if key == ord("q"):
                 break
 
+            import time
+
             if key == ord(" "):
-                print(f"[INFO] recording sample {sample_idx:03d} ...")
+                for _ in range(100):
+                    time.sleep(1)
 
-                sequence = []
-                attempts = 0
+                    current_idx = sample_idx
+                    print(f"[INFO] recording sample {current_idx:03d} ...")
 
-                while len(sequence) < frames_per_sample and attempts < max_attempt_frames:
-                    attempts += 1
+                    sequence = []
+                    attempts = 0
 
-                    ret, frame = cap.read()
-                    if not ret:
-                        continue
+                    while len(sequence) < frames_per_sample and attempts < max_attempt_frames:
+                        attempts += 1
 
-                    input_frame = frame.copy()
-                    show_frame = cv2.flip(frame, 1)
+                        ret, frame = cap.read()
+                        if not ret:
+                            continue
 
-                    rgb = cv2.cvtColor(input_frame, cv2.COLOR_BGR2RGB)
+                        input_frame = frame.copy()
+                        show_frame = cv2.flip(frame, 1)
 
-                    results_hands = hands_model.process(rgb)
-                    results_pose = pose_model.process(rgb)
+                        rgb = cv2.cvtColor(input_frame, cv2.COLOR_BGR2RGB)
 
-                    shoulders = extract_shoulders(results_pose)
-                    hands = extract_hands(results_hands)
+                        results_hands = hands_model.process(rgb)
+                        results_pose = pose_model.process(rgb)
 
-                    # 손 0개면 폐기
-                    if shoulders is None or len(hands) == 0:
-                        draw_text(
-                            show_frame,
-                            f"SKIP | shoulders={shoulders is not None} hands={len(hands)}",
-                            color=(0, 0, 255),
-                        )
-                        cv2.imshow("collect", show_frame)
-                        if cv2.waitKey(1) & 0xFF == ord("q"):
-                            cap.release()
-                            cv2.destroyAllWindows()
-                            return
-                        continue
+                        shoulders = extract_shoulders(results_pose)
+                        hands = extract_hands(results_hands)
 
-                    left_hand, right_hand, hand_count = assign_left_right(hands, shoulders)
-                    frame_vec = normalize_frame(left_hand, right_hand, shoulders)
+                        if shoulders is None or len(hands) == 0:
+                            draw_text(
+                                show_frame,
+                                f"SKIP | shoulders={shoulders is not None} hands={len(hands)}",
+                                color=(0, 0, 255),
+                            )
+                            cv2.imshow("collect", show_frame)
+                            if cv2.waitKey(1) & 0xFF == ord("q"):
+                                cap.release()
+                                cv2.destroyAllWindows()
+                                return
+                            continue
 
-                    if not is_valid_frame(frame_vec):
-                        draw_text(
-                            show_frame,
-                            f"INVALID | hands={hand_count}",
-                            color=(0, 0, 255),
-                        )
-                        cv2.imshow("collect", show_frame)
-                        if cv2.waitKey(1) & 0xFF == ord("q"):
-                            cap.release()
-                            cv2.destroyAllWindows()
-                            return
-                        continue
+                        left_hand, right_hand, hand_count = assign_left_right(hands, shoulders)
+                        frame_vec = normalize_frame(left_hand, right_hand, shoulders)
 
-                    sequence.append(frame_vec)
+                        if not is_valid_frame(frame_vec):
+                            draw_text(
+                                show_frame,
+                                f"INVALID | hands={hand_count}",
+                                color=(0, 0, 255),
+                            )
+                            cv2.imshow("collect", show_frame)
+                            if cv2.waitKey(1) & 0xFF == ord("q"):
+                                cap.release()
+                                cv2.destroyAllWindows()
+                                return
+                            continue
 
-                    if results_hands.multi_hand_landmarks:
-                        for hand_landmarks in results_hands.multi_hand_landmarks:
+                        sequence.append(frame_vec)
+
+                        if results_hands.multi_hand_landmarks:
+                            for hand_landmarks in results_hands.multi_hand_landmarks:
+                                mp_drawing.draw_landmarks(
+                                    show_frame,
+                                    hand_landmarks,
+                                    mp_hands.HAND_CONNECTIONS
+                                )
+
+                        if results_pose.pose_landmarks:
                             mp_drawing.draw_landmarks(
                                 show_frame,
-                                hand_landmarks,
-                                mp_hands.HAND_CONNECTIONS
+                                results_pose.pose_landmarks,
+                                mp_pose.POSE_CONNECTIONS
                             )
 
-                    if results_pose.pose_landmarks:
-                        mp_drawing.draw_landmarks(
+                        draw_text(
                             show_frame,
-                            results_pose.pose_landmarks,
-                            mp_pose.POSE_CONNECTIONS
+                            f"REC {label} {current_idx:03d} | valid {len(sequence)}/{frames_per_sample} | attempt {attempts}/{max_attempt_frames}",
+                            color=(0, 255, 255),
                         )
 
-                    draw_text(
-                        show_frame,
-                        f"REC {label} {sample_idx:03d} | valid {len(sequence)}/{frames_per_sample} | attempt {attempts}/{max_attempt_frames}",
-                        color=(0, 255, 255),
-                    )
+                        cv2.imshow("collect", show_frame)
 
-                    cv2.imshow("collect", show_frame)
+                        if cv2.waitKey(1) & 0xFF == ord("q"):
+                            cap.release()
+                            cv2.destroyAllWindows()
+                            return
 
-                    if cv2.waitKey(1) & 0xFF == ord("q"):
-                        cap.release()
-                        cv2.destroyAllWindows()
-                        return
+                    if len(sequence) != frames_per_sample:
+                        print("[WARN] 유효 프레임 부족 -> 저장 안 함")
+                        continue
 
-                if len(sequence) != frames_per_sample:
-                    print("[WARN] 유효 프레임 부족 -> 저장 안 함")
-                    continue
+                    sequence = np.array(sequence, dtype=np.float32)
 
-                sequence = np.array(sequence, dtype=np.float32)
+                    if not is_valid_sequence(sequence, min_valid_ratio=0.9):
+                        print("[WARN] 시퀀스 품질 낮음 -> 저장 안 함")
+                        continue
 
-                if not is_valid_sequence(sequence, min_valid_ratio=0.9):
-                    print("[WARN] 시퀀스 품질 낮음 -> 저장 안 함")
-                    continue
+                    save_path = os.path.join(label_dir, f"{current_idx:03d}.npy")
+                    np.save(save_path, sequence)
 
-                save_path = os.path.join(label_dir, f"{sample_idx:03d}.npy")
-                np.save(save_path, sequence)
-
-                print(f"[SAVED] {save_path} | shape={sequence.shape}")
-                sample_idx += 1
+                    print(f"[SAVED] {save_path} | shape={sequence.shape}")
+                    sample_idx += 1
 
     cap.release()
     cv2.destroyAllWindows()
