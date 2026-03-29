@@ -202,18 +202,30 @@ def predict_sequence(model, seq_60):
 
     return pred, conf, indices.cpu().numpy().tolist(), values.cpu().numpy().tolist()
 
-def draw_text(img, text, y=30, color=(0, 255, 0), scale=0.7):
-    cv2.putText(
-        img,
-        text,
-        (10, y),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        scale,
-        color,
-        2,
-        cv2.LINE_AA,
-    )
+from PIL import ImageFont, ImageDraw, Image
+import numpy as np
+import cv2
 
+FONT_PATH = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"  # Ubuntu 예시
+# FONT_PATH = "C:/Windows/Fonts/malgun.ttf"  # Windows 예시
+
+def draw_text(img, text, y=30, color=(0, 255, 0), scale=0.7):
+    if text is None:
+        return
+
+    # cv2(BGR) -> PIL(RGB)
+    img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(img_pil)
+
+    font_size = max(20, int(25 * scale))
+    font = ImageFont.truetype(FONT_PATH, font_size)
+
+    # PIL은 RGB라서 색 순서 바꿔야 함
+    rgb_color = (color[2], color[1], color[0])
+    draw.text((10, y), str(text), font=font, fill=rgb_color)
+
+    # PIL(RGB) -> cv2(BGR)
+    img[:] = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
 
 def majority_vote(items):
     if not items:
