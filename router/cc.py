@@ -1,9 +1,11 @@
-import io
+import os
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from openai import OpenAI
 
 router = APIRouter(prefix='/ai')
+Client = OpenAI(api_key = os.getenv("OPENAI_API_KEY"))
 
-WINDOW_SIZE = 15 
+WINDOW_SIZE = 60
 
 @router.websocket('/cc')
 async def jamak(websocket: WebSocket):
