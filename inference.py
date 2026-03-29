@@ -5,28 +5,21 @@ import torch
 import torch.nn as nn
 from collections import deque, Counter
 
-# =========================
-# 설정
-# =========================
 CKPT_PATH = "best_bigru.pt"
 SEQ_LEN = 60
 INPUT_DIM = 88
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-PRED_EVERY_N_FRAMES = 2      # 너무 자주 추론하면 흔들림
-CONF_THRESHOLD = 0.70        # 이보다 낮으면 unsure
-SMOOTHING_WINDOW = 7         # 최근 예측 7개 다수결
-MIN_VALID_FRAMES = 45        # 60프레임 중 최소 유효 프레임 수
+PRED_EVERY_N_FRAMES = 2
+CONF_THRESHOLD = 0.70 
+SMOOTHING_WINDOW = 7 
+MIN_VALID_FRAMES = 45 
 CAM_INDEX = 0
 
 mp_hands = mp.solutions.hands
 mp_pose = mp.solutions.pose
 mp_drawing = mp.solutions.drawing_utils
 
-
-# =========================
-# 모델
-# =========================
 class BiGRUClassifier(nn.Module):
     def __init__(self, input_dim=88, hidden_dim=128, num_layers=2, num_classes=10, dropout=0.3):
         super().__init__()
@@ -51,10 +44,6 @@ class BiGRUClassifier(nn.Module):
         last = out[:, -1, :]
         return self.head(last)
 
-
-# =========================
-# 수집 코드와 같은 전처리
-# =========================
 def extract_shoulders(results_pose):
     if not results_pose.pose_landmarks:
         return None
@@ -75,7 +64,6 @@ def extract_shoulders(results_pose):
         return None
 
     return shoulders
-
 
 def extract_hands(results_hands):
     hands = []
@@ -132,12 +120,12 @@ def normalize_frame(left_hand, right_hand, shoulders):
     shoulders = (shoulders - center) / shoulder_dist
 
     frame_vec = np.concatenate([
-        left_hand.flatten(),   # 42
-        right_hand.flatten(),  # 42
-        shoulders.flatten()    # 4
+        left_hand.flatten(), 
+        right_hand.flatten(), 
+        shoulders.flatten() 
     ], axis=0).astype(np.float32)
 
-    return frame_vec  # (88,)
+    return frame_vec 
 
 
 def is_valid_frame(frame_vec):
@@ -177,10 +165,6 @@ def normalize_sequence(x: np.ndarray) -> np.ndarray:
     std = x.std(axis=0, keepdims=True) + 1e-6
     return (x - mean) / std
 
-
-# =========================
-# 모델 로드 / 추론
-# =========================
 def load_model():
     ckpt = torch.load(CKPT_PATH, map_location=DEVICE)
 
@@ -218,10 +202,6 @@ def predict_sequence(model, seq_60):
 
     return pred, conf, indices.cpu().numpy().tolist(), values.cpu().numpy().tolist()
 
-
-# =========================
-# 유틸
-# =========================
 def draw_text(img, text, y=30, color=(0, 255, 0), scale=0.7):
     cv2.putText(
         img,
@@ -240,10 +220,6 @@ def majority_vote(items):
         return None
     return Counter(items).most_common(1)[0][0]
 
-
-# =========================
-# 메인
-# =========================
 def main():
     print("DEVICE:", DEVICE)
     model, idx2label = load_model()
@@ -304,8 +280,6 @@ def main():
 
             valid = is_valid_frame(frame_vec)
 
-            # 실시간은 프레임이 비면 버퍼가 깨지니까
-            # invalid면 마지막 유효 프레임으로 채우고 valid_flag는 False로 기록
             if valid:
                 last_valid_framevec = frame_vec.copy()
                 seq_buffer.append(frame_vec)
@@ -314,7 +288,6 @@ def main():
                 seq_buffer.append(last_valid_framevec.copy())
                 valid_flag_buffer.append(False)
 
-            # 랜드마크 그리기
             if results_hands.multi_hand_landmarks:
                 for hand_landmarks in results_hands.multi_hand_landmarks:
                     mp_drawing.draw_landmarks(
@@ -330,7 +303,6 @@ def main():
                     mp_pose.POSE_CONNECTIONS
                 )
 
-            # 충분히 쌓였을 때만 예측
             valid_frames = sum(valid_flag_buffer)
             can_predict = (len(seq_buffer) == SEQ_LEN and valid_frames >= MIN_VALID_FRAMES)
 
@@ -358,7 +330,6 @@ def main():
                 ]
                 top3_text = [x for x in top3_text if x]
 
-            # UI
             color = (0, 255, 0) if stable_label not in ["unsure", "waiting..."] else (0, 255, 255)
 
             draw_text(view, f"pred: {stable_label}", 35, color=color, scale=1.0)
@@ -374,7 +345,6 @@ def main():
                 draw_text(view, line, y, color=(255, 255, 255))
                 y += 35
 
-            # 진행 바
             bar_x1, bar_y1 = 10, 660
             bar_x2, bar_y2 = 610, 700
             cv2.rectangle(view, (bar_x1, bar_y1), (bar_x2, bar_y2), (80, 80, 80), 2)
