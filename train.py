@@ -194,6 +194,12 @@ def print_dataset_stats(y):
         print(f"{cls}: {count}")
 
 
+import matplotlib.font_manager as fm
+
+# 1) 한글 폰트 설정
+plt.rcParams["font.family"] = "NanumGothic"
+plt.rcParams["axes.unicode_minus"] = False
+
 def main():
     dataset_dir = "dataset"   # 여기를 네 폴더 경로로 수정 가능
     target_len = 20
