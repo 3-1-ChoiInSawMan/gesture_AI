@@ -186,7 +186,7 @@ def load_model():
 
 
 def predict_sequence(model, seq_60):
-    x = np.asarray(seq_60, dtype=np.float32)   # (60, 88)
+    x = np.asarray(seq_60, dtype=np.float32) 
     x = normalize_sequence(x)
     x = torch.tensor(x, dtype=torch.float32).unsqueeze(0).to(DEVICE)
 
@@ -206,8 +206,7 @@ from PIL import ImageFont, ImageDraw, Image
 import numpy as np
 import cv2
 
-FONT_PATH = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"  # Ubuntu 예시
-# FONT_PATH = "C:/Windows/Fonts/malgun.ttf"  # Windows 예시
+FONT_PATH = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf" # 나눔고딕
 
 def draw_text(img, text, y=30, color=(0, 255, 0), scale=0.7):
     if text is None:
