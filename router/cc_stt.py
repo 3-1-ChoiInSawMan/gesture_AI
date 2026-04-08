@@ -1,7 +1,7 @@
 import io
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-router = APIRouter(prefix='/ai')
+router = APIRouter()
 
 WINDOW_SIZE = 15 
 
