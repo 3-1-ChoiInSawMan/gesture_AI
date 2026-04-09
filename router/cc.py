@@ -3,6 +3,9 @@ import torch
 import torch.nn as nn
 import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from util.labels import LABEL2IDX
+
+idx2label = {v: k for k, v in LABEL2IDX.items()}
 
 router = APIRouter()
 
@@ -75,8 +78,8 @@ async def jamak(websocket: WebSocket):
             with torch.no_grad():
                 out = model(x)
                 pred = torch.argmax(out, dim=1).item()
-
-            await websocket.send_text(str(pred))
+                label = idx2label[pred]
+            await websocket.send_text(label)
 
     except WebSocketDisconnect:
         raise WebSocketDisconnect("WebSocket disconnected")
