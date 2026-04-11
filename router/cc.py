@@ -5,18 +5,13 @@ import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from util.labels import LABEL2IDX
 from util.bigruClassifier import BiGRUClassifier
+from util.config import INPUT_SIZE, HIDDEN_SIZE, NUM_LAYERS, NUM_CLASSES
 
 idx2label = {v: k for k, v in LABEL2IDX.items()}
 router = APIRouter()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-WINDOW_SIZE = 60
-INPUT_SIZE = 88
-HIDDEN_SIZE = 128
-NUM_LAYERS = 2
-NUM_CLASSES = 29
-
-checkpoint = torch.load("best_bigru.pt", map_location=device)
+checkpoint = torch.load("weights/best_bigru.pt", map_location=device) 
 
 if isinstance(checkpoint, nn.Module):
     model = checkpoint
