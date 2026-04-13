@@ -27,8 +27,6 @@ else:
 
 model.to(device)
 model.eval()
-
-
 @router.websocket("/cc")
 async def jamak(websocket: WebSocket):
     await websocket.accept()
