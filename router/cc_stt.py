@@ -2,11 +2,10 @@ import io
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from faster_whisper import WhisperModel
 import torch
+from util.config import STT_WINDOW_SIZE
 
 router = APIRouter()
 model = WhisperModel("small", device = 'cuda' if torch.cuda.is_available() else 'cpu')
-
-WINDOW_SIZE = 15 
 
 @router.websocket('/cc_stt')
 async def stt_cc(ws: WebSocket):

@@ -36,4 +36,4 @@ COPY . .
 
 EXPOSE 8000
 
-CMD ["/app/.venv/bin/python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/app/.venv/bin/python", "-m", "uvicorn", "main:APP", "--host", "0.0.0.0", "--port", "8000"]
