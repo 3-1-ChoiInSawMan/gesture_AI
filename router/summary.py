@@ -35,11 +35,11 @@ def summary_meeting(payload: SummaryRequest) -> SummaryResponse:
                 },
             ],
         )
-    except Exception as exc:
+    except Exception as E:
         raise HTTPException(
             status_code=502,
-            detail=f"요약 생성 중 OpenAI 호출에 실패했습니다: {exc}",
-        ) from exc
+            detail=f"요약 생성 중 OpenAI 호출에 실패했습니다: {E}",
+        ) from E
 
     summary_text = response.output_text.strip()
     if not summary_text:
