@@ -12,6 +12,12 @@ SYSTEM_PROMPT = (
     "불필요한 수식어와 추측은 넣지 마라."
 )
 
+CC_SENTENCE_SYSTEM_PROMPT = (
+    "당신은 수어 인식 단어 목록을 이어 자연스러운 한국어 문장으로 복원하는 비서다. "
+    "단어들의 시간 순서를 유지한 채 가장 자연스러운 문장 한 문장만 반환하라. "
+    "설명, 따옴표, 번호, 불필요한 수식어는 넣지 마라."
+)
+
 TEXT_KEYS = (
     "message",
     "text",
@@ -23,3 +29,4 @@ TEXT_KEYS = (
 )
 SPEAKER_KEYS = ("speaker", "role", "type", "source", "sender", "user")
 LIST_KEYS = ("messages", "conversation", "contents", "items", "segments")
+SILENCE_TIMEOUT_SECONDS = 2.0
