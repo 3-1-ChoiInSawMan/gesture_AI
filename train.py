@@ -243,7 +243,7 @@ def main():
     print(classification_report(y_test, y_pred, zero_division=0))
 
     print("\n[Sample Predictions]")
-    for i in range(min(10, len(X_test))):
+    for i in range(min(20, len(X_test))):
         pred, dist = clf.predict_one(X_test[i])
         print(f"GT={y_test[i]:<15} PRED={pred:<15} DTW_DIST={dist:.4f}")
 
