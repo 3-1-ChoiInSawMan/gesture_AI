@@ -20,7 +20,7 @@ from util.config import (
     NUM_LAYERS,
     SILENCE_TIMEOUT_SECONDS,
     WINDOW_SIZE,
-    LABEL2IDX
+    LABEL2IDX  
 )
 from util.service.cc_service import generate_sentence_from_words, store_final_sentence
 
