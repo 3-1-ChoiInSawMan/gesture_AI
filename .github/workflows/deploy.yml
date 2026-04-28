@@ -1,0 +1,36 @@
+name: Deploy to school PC
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Pull latest code
+        shell: powershell
+        run: |
+          cd C:\Users\pc\Desktop\ingyu\gesture_AI
+          git fetch origin main
+          git reset --hard origin/main
+
+      - name: Install dependencies
+        shell: powershell
+        run: |
+          cd C:\Users\pc\Desktop\ingyu\gesture_AI
+          .\.venv\Scripts\pip.exe install -r requirements.txt
+
+      - name: Stop old server
+        shell: powershell
+        run: |
+          Get-CimInstance Win32_Process |
+            Where-Object { $_.CommandLine -like "*uvicorn*" -and $_.CommandLine -like "*8000*" } |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+
+      - name: Start server
+        shell: powershell
+        run: |
+          Start-Process powershell -ArgumentList '-NoExit', '-Command', 'cd C:\Users\pc\Desktop\ingyu\gesture_AI; .\.venv\Scripts\uvicorn.exe main:APP --host 127.0.0.1 --port 8000'
