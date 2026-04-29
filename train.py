@@ -247,6 +247,5 @@ def main():
         pred, dist = clf.predict_one(X_test[i])
         print(f"GT={y_test[i]:<15} PRED={pred:<15} DTW_DIST={dist:.4f}")
 
-
 if __name__ == "__main__":
     main()
