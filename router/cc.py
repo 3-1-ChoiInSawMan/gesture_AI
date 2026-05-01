@@ -11,6 +11,9 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from util.bigruClassifier import BiGRUClassifier
 from util.config import (
     CC_CONF_THRESHOLD,
+    CC_HANDS_DOWN_MARGIN,
+    CC_HANDS_DOWN_MIN_FRAMES,
+    CC_HANDS_DOWN_RATIO,
     CC_MIN_VALID_FRAMES,
     CC_PRED_EVERY_N_FRAMES,
     CC_SMOOTHING_WINDOW,
@@ -20,7 +23,7 @@ from util.config import (
     NUM_LAYERS,
     SILENCE_TIMEOUT_SECONDS,
     WINDOW_SIZE,
-    LABEL2IDX
+    LABEL2IDX  
 )
 from util.service.cc_service import generate_sentence_from_words, store_final_sentence
 
@@ -86,6 +89,32 @@ def _is_valid_frame(frame_vec: np.ndarray | None) -> bool:
         return False
 
     return True
+
+
+def _are_hands_lowered(frame_vec: np.ndarray | None) -> bool:
+    if frame_vec is None or frame_vec.shape != (INPUT_SIZE,):
+        return False
+
+    if not np.isfinite(frame_vec).all():
+        return False
+
+    points = frame_vec.reshape(44, 2)
+    left_hand = points[:21]
+    right_hand = points[21:42]
+    shoulders = points[42:44]
+
+    if np.linalg.norm(shoulders[0] - shoulders[1]) < 0.1:
+        return False
+
+    shoulder_y = max(shoulders[0][1], shoulders[1][1])
+    lowered_y = shoulder_y + CC_HANDS_DOWN_MARGIN
+    left_lowered_ratio = np.mean(left_hand[:, 1] > lowered_y)
+    right_lowered_ratio = np.mean(right_hand[:, 1] > lowered_y)
+
+    return (
+        left_lowered_ratio >= CC_HANDS_DOWN_RATIO
+        and right_lowered_ratio >= CC_HANDS_DOWN_RATIO
+    )
 
 
 def _majority_vote(items: deque[int]) -> int | None:
@@ -171,6 +200,7 @@ async def jamak(websocket: WebSocket):
     pred_history: deque[int] = deque(maxlen=CC_SMOOTHING_WINDOW)
     last_valid_framevec = np.zeros((INPUT_SIZE,), dtype=np.float32)
     frame_count = 0
+    hands_down_count = 0
 
     try:
         while True:
@@ -186,6 +216,7 @@ async def jamak(websocket: WebSocket):
                     words,
                     emit=True,
                 )
+
                 continue
 
             if not isinstance(data, dict):
@@ -200,33 +231,42 @@ async def jamak(websocket: WebSocket):
             except (TypeError, ValueError):
                 continue
 
+            frames: list[np.ndarray]
             if payload.shape == (INPUT_SIZE,):
+                frames = [payload]
+            elif payload.shape == (WINDOW_SIZE, INPUT_SIZE):
+                frames = list(payload)
+            else:
+                continue
+
+            for frame_vec in frames:
+                if _are_hands_lowered(frame_vec):
+                    hands_down_count += 1
+                    if hands_down_count >= CC_HANDS_DOWN_MIN_FRAMES:
+                        words = await _flush_words(
+                            websocket,
+                            session_id,
+                            words,
+                            emit=True,
+                        )
+                        seq_buffer.clear()
+                        valid_flag_buffer.clear()
+                        pred_history.clear()
+                    continue
+
+                hands_down_count = 0
                 frame_count += 1
                 word, last_valid_framevec = _consume_frame(
-                    payload,
+                    frame_vec,
                     seq_buffer=seq_buffer,
                     valid_flag_buffer=valid_flag_buffer,
                     pred_history=pred_history,
                     last_valid_framevec=last_valid_framevec,
                     frame_count=frame_count,
                 )
-            elif payload.shape == (WINDOW_SIZE, INPUT_SIZE):
-                word = None
-                for frame_vec in payload:
-                    frame_count += 1
-                    word, last_valid_framevec = _consume_frame(
-                        frame_vec,
-                        seq_buffer=seq_buffer,
-                        valid_flag_buffer=valid_flag_buffer,
-                        pred_history=pred_history,
-                        last_valid_framevec=last_valid_framevec,
-                        frame_count=frame_count,
-                    )
-            else:
-                continue
 
-            if word and (not words or words[-1] != word):
-                words.append(word)
+                if word and (not words or words[-1] != word):
+                    words.append(word)
 
     except WebSocketDisconnect:
         await _flush_words(
