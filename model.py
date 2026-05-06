@@ -12,7 +12,7 @@ from torch.utils.data import Dataset, DataLoader
 # 설정
 # =========================
 DATASET_DIR = "dataset"   # dataset/class_name/*.npy
-SEQ_LEN = 60
+SEQ_LEN = 30
 INPUT_DIM = 88
 BATCH_SIZE = 16
 EPOCHS = 80
@@ -90,7 +90,7 @@ def build_split(dataset_dir):
 # Dataset
 # =========================
 class GestureDataset(Dataset):
-    def __init__(self, samples, seq_len=60, augment=False):
+    def __init__(self, samples, seq_len=30, augment=False):
         self.samples = samples
         self.seq_len = seq_len
         self.augment = augment
