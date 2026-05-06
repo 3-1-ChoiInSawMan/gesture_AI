@@ -23,11 +23,14 @@ from util.config import (
     LABEL2IDX
 )
 from util.service.cc_service import generate_sentence_from_words, store_final_sentence
+from util.loadLogger import logger
+
+logger.info("cc router 로딩됨")
 
 router = APIRouter()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model_path = Path(__file__).resolve().parent.parent / "weights" / "best_bigru.pt"
+model_path = Path(__file__).resolve().parent.parent / "weights" / "best_bigru30.pt"
 checkpoint = torch.load(model_path, map_location=device)
 
 if isinstance(checkpoint, dict) and "idx2label" in checkpoint:
@@ -179,6 +182,7 @@ async def jamak(websocket: WebSocket):
                     websocket.receive_json(),
                     timeout=SILENCE_TIMEOUT_SECONDS,
                 )
+                logger.info("소켓연결")
             except asyncio.TimeoutError:
                 words = await _flush_words(
                     websocket,
@@ -186,6 +190,7 @@ async def jamak(websocket: WebSocket):
                     words,
                     emit=True,
                 )
+                logger.info("소켓끊김")
                 continue
 
             if not isinstance(data, dict):
@@ -210,6 +215,7 @@ async def jamak(websocket: WebSocket):
                     last_valid_framevec=last_valid_framevec,
                     frame_count=frame_count,
                 )
+                logger.info("읽는중")
             elif payload.shape == (WINDOW_SIZE, INPUT_SIZE):
                 word = None
                 for frame_vec in payload:
@@ -222,11 +228,13 @@ async def jamak(websocket: WebSocket):
                         last_valid_framevec=last_valid_framevec,
                         frame_count=frame_count,
                     )
+                    logger.info("읽는중")
             else:
                 continue
 
             if word and (not words or words[-1] != word):
                 words.append(word)
+                logger.info("words에 추가")
 
     except WebSocketDisconnect:
         await _flush_words(
@@ -235,3 +243,4 @@ async def jamak(websocket: WebSocket):
             words,
             emit=False,
         )
+        logger.info("소켓끊김")
