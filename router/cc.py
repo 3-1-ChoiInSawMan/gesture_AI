@@ -240,24 +240,8 @@ async def jamak(websocket: WebSocket):
                 frames = [payload]
             elif payload.shape == (WINDOW_SIZE, INPUT_SIZE):
                 frames = list(payload)
-            
-            elif payload.shape == (WINDOW_SIZE, INPUT_SIZE):
-                word = None
-                for frame_vec in payload:
-                    frame_count += 1
-                    word, last_valid_framevec = _consume_frame(
-                        frame_vec,
-                        seq_buffer=seq_buffer,
-                        valid_flag_buffer=valid_flag_buffer,
-                        pred_history=pred_history,
-                        last_valid_framevec=last_valid_framevec,
-                        frame_count=frame_count,
-                    )
-                    logger.info("읽는중")
             else:
-                if word and (not words or words[-1] != word):
-                    words.append(word)
-                    logger.info("words에 추가")
+                continue
 
             for frame_vec in frames:
                 if _are_hands_lowered(frame_vec):
@@ -285,7 +269,9 @@ async def jamak(websocket: WebSocket):
                     frame_count=frame_count,
                 )
                 logger.info("읽는중")
-            
+                if word and (not words or words[-1] != word):
+                    words.append(word)
+                    logger.info("words에 추가")
 
     except WebSocketDisconnect:
         await _flush_words(
