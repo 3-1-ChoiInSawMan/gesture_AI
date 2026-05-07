@@ -1,6 +1,10 @@
 import os
 from datetime import UTC, datetime
 
+from util.ssl_config import configure_system_truststore
+
+configure_system_truststore()
+
 from openai import OpenAI
 
 from util.config import CC_SENTENCE_SYSTEM_PROMPT
