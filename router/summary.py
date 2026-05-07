@@ -2,7 +2,6 @@ import os
 from fastapi import APIRouter, HTTPException
 
 from util.ssl_config import configure_system_truststore
-
 configure_system_truststore()
 
 from openai import OpenAI
