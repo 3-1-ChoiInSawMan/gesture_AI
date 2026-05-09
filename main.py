@@ -2,7 +2,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI
-from router import health, cc, cc_stt, summary
+from router import health, cc, summary, cc_stt 
 from pymongo import MongoClient
 
 APP = FastAPI()
