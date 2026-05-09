@@ -8,22 +8,32 @@ configure_system_truststore()
 from openai import OpenAI
 
 from util.config import CC_SENTENCE_SYSTEM_PROMPT
+from util.loadLogger import logger
 from util.mongo_connect import col
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY")) if os.getenv("OPENAI_API_KEY") else None
 
 
-def build_sentence_prompt(words: list[str]) -> str:
-    joined_words = ", ".join(words)
+def _fallback_from_candidates(word_candidates: list[list[str]]) -> str:
+    return " ".join(candidates[0] for candidates in word_candidates if candidates).strip()
+
+
+def build_sentence_prompt(word_candidates: list[list[str]]) -> str:
+    candidate_lines = "\n".join(
+        f"{index}. 후보: {', '.join(candidates)}"
+        for index, candidates in enumerate(word_candidates, start=1)
+        if candidates
+    )
     return (
-        "다음은 시간 순서대로 인식된 수어 단어들입니다.\n"
-        "이 단어들을 참고해 가장 자연스러운 한국어 문장 한 문장만 반환하세요.\n"
-        f"단어 목록: {joined_words}"
+        "다음은 시간 순서대로 인식된 수어별 top 후보 단어입니다.\n"
+        "각 번호는 하나의 수어를 의미하며, 후보는 가능성이 높은 순서입니다.\n"
+        "문맥상 가장 자연스러운 후보를 골라 한국어 문장 한 문장으로 복원하세요.\n"
+        f"{candidate_lines}"
     )
 
 
-def generate_sentence_from_words(words: list[str]) -> str:
-    fallback_sentence = " ".join(words).strip()
+def generate_sentence_from_words(word_candidates: list[list[str]]) -> str:
+    fallback_sentence = _fallback_from_candidates(word_candidates)
     model_name = os.getenv("MODEL")
 
     if not fallback_sentence:
@@ -37,17 +47,22 @@ def generate_sentence_from_words(words: list[str]) -> str:
             model=model_name,
             input=[
                 {"role": "system", "content": CC_SENTENCE_SYSTEM_PROMPT},
-                {"role": "user", "content": build_sentence_prompt(words)},
+                {"role": "user", "content": build_sentence_prompt(word_candidates)},
             ],
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning("OpenAI sentence generation failed: %s", exc)
         return fallback_sentence
 
     sentence = response.output_text.strip()
     return sentence or fallback_sentence
 
 
-def store_final_sentence(session_id: str, sentence: str, words: list[str]) -> None:
+def store_final_sentence(
+    session_id: str,
+    sentence: str,
+    word_candidates: list[list[str]],
+) -> None:
     if not sentence:
         return
 
@@ -58,9 +73,11 @@ def store_final_sentence(session_id: str, sentence: str, words: list[str]) -> No
                 "text": sentence,
                 "source": "cc",
                 "is_final": True,
-                "words": words,
+                "words": word_candidates,
+                "top_words": [candidates[0] for candidates in word_candidates if candidates],
                 "created_at": datetime.now(UTC),
             }
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to store CC sentence: %s", exc)
         return
