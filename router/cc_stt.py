@@ -1,5 +1,9 @@
 import asyncio
 import io
+
+from util.ssl_config import configure_system_truststore
+configure_system_truststore()
+
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
