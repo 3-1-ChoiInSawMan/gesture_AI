@@ -21,11 +21,13 @@ from util.config import (
 )
 from util.mongo_connect import col
 
+from util.loadLogger import logger
+logger.info("cc_stt router 로딩됨")
+
 router = APIRouter()
 device = "cuda" if torch.cuda.is_available() else "cpu"
 compute_type = "float16" if device == "cuda" else "int8"
-model = WhisperModel("base", device=device, compute_type=compute_type)
-
+model = WhisperModel("medium", device=device, compute_type=compute_type)
 
 @dataclass
 class STTSessionState:
