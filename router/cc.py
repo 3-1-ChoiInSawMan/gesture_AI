@@ -17,6 +17,7 @@ from util.config import (
     CC_MIN_VALID_FRAMES,
     CC_PRED_EVERY_N_FRAMES,
     CC_SMOOTHING_WINDOW,
+    CC_TOP_K,
     HIDDEN_SIZE,
     INPUT_SIZE,
     NUM_CLASSES,
@@ -126,7 +127,7 @@ def _majority_vote(items: deque[int]) -> int | None:
     return Counter(items).most_common(1)[0][0]
 
 
-def _predict_sequence(sequence: list[np.ndarray]) -> tuple[int, float]:
+def _predict_sequence(sequence: list[np.ndarray]) -> list[tuple[int, float]]:
     x = np.asarray(sequence, dtype=np.float32)
     x = _normalize_sequence(x)
     x = torch.from_numpy(x).unsqueeze(0).to(device)
@@ -135,9 +136,12 @@ def _predict_sequence(sequence: list[np.ndarray]) -> tuple[int, float]:
         logits = model(x)
         probs = torch.softmax(logits, dim=1)[0]
 
-    prediction = torch.argmax(probs).item()
-    confidence = probs[prediction].item()
-    return prediction, confidence
+    top_k = min(CC_TOP_K, probs.numel())
+    confidences, predictions = torch.topk(probs, k=top_k)
+    return [
+        (prediction.item(), confidence.item())
+        for prediction, confidence in zip(predictions, confidences)
+    ]
 
 
 def _consume_frame(
@@ -148,7 +152,7 @@ def _consume_frame(
     pred_history: deque[int],
     last_valid_framevec: np.ndarray,
     frame_count: int,
-) -> tuple[str | None, np.ndarray]:
+) -> tuple[list[str] | None, np.ndarray]:
     valid = _is_valid_frame(frame_vec)
 
     if valid:
@@ -164,22 +168,32 @@ def _consume_frame(
     if not can_predict or frame_count % CC_PRED_EVERY_N_FRAMES != 0:
         return None, last_valid_framevec
 
-    prediction, confidence = _predict_sequence(list(seq_buffer))
-    pred_history.append(prediction if confidence >= CC_CONF_THRESHOLD else -1)
-
-    voted = _majority_vote(pred_history)
-    if voted is None or voted == -1:
+    top_predictions = _predict_sequence(list(seq_buffer))
+    prediction, confidence = top_predictions[0]
+    if confidence < CC_CONF_THRESHOLD:
+        pred_history.append(-1)
         return None, last_valid_framevec
 
-    return idx2label.get(voted), last_valid_framevec
+    pred_history.append(prediction)
+
+    voted = _majority_vote(pred_history)
+    if voted is None or voted == -1 or voted != prediction:
+        return None, last_valid_framevec
+
+    candidates = [
+        idx2label[index]
+        for index, _ in top_predictions
+        if index in idx2label
+    ]
+    return candidates or None, last_valid_framevec
 
 
 async def _flush_words(
     websocket: WebSocket,
     session_id: str,
-    words: list[str],
+    words: list[list[str]],
     *,
-    emit: bool, ) -> list[str]:
+    emit: bool, ) -> list[list[str]]:
     if not words:
         return []
 
@@ -197,7 +211,7 @@ async def _flush_words(
 async def jamak(websocket: WebSocket):
     await websocket.accept()
     session_id = websocket.query_params.get("session_id") or str(uuid4())
-    words: list[str] = []
+    words: list[list[str]] = []
     seq_buffer: deque[np.ndarray] = deque(maxlen=WINDOW_SIZE)
     valid_flag_buffer: deque[bool] = deque(maxlen=WINDOW_SIZE)
     pred_history: deque[int] = deque(maxlen=CC_SMOOTHING_WINDOW)
@@ -260,7 +274,7 @@ async def jamak(websocket: WebSocket):
 
                 hands_down_count = 0
                 frame_count += 1
-                word, last_valid_framevec = _consume_frame(
+                candidates, last_valid_framevec = _consume_frame(
                     frame_vec,
                     seq_buffer=seq_buffer,
                     valid_flag_buffer=valid_flag_buffer,
@@ -269,8 +283,8 @@ async def jamak(websocket: WebSocket):
                     frame_count=frame_count,
                 )
                 logger.info("읽는중")
-                if word and (not words or words[-1] != word):
-                    words.append(word)
+                if candidates and (not words or words[-1][0] != candidates[0]):
+                    words.append(candidates)
                     logger.info("words에 추가")
 
     except WebSocketDisconnect:

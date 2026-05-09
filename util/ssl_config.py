@@ -12,7 +12,7 @@ def configure_system_truststore() -> None:
     try:
         import truststore
     except ImportError:
-        return
+        raise RuntimeError("Dependencies missing about truststore")
 
     try:
         truststore.inject_into_ssl()
