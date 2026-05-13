@@ -179,7 +179,20 @@ def _consume_frame(
     valid_frames = sum(valid_flag_buffer)
     can_predict = len(seq_buffer) == WINDOW_SIZE and valid_frames >= CC_MIN_VALID_FRAMES
     if not can_predict or frame_count % CC_PRED_EVERY_N_FRAMES != 0:
-        return None, last_valid_framevec, None
+        debug = {
+            "frame_count": frame_count,
+            "valid": valid,
+            "buffer_len": len(seq_buffer),
+            "valid_frames": valid_frames,
+            "can_predict": can_predict,
+        }
+        if len(seq_buffer) < WINDOW_SIZE:
+            debug["reason"] = "buffering"
+        elif valid_frames < CC_MIN_VALID_FRAMES:
+            debug["reason"] = "not_enough_valid_frames"
+        else:
+            debug["reason"] = "prediction_interval_skipped"
+        return None, last_valid_framevec, debug
 
     predictions = _predict_sequence(list(seq_buffer))
     if not predictions:
@@ -241,6 +254,7 @@ async def jamak(websocket: WebSocket):
     await websocket.accept()
     session_id = websocket.query_params.get("session_id") or str(uuid4())
     debug_enabled = websocket.query_params.get("debug") == "1"
+    ignore_hands_down = websocket.query_params.get("ignore_hands_down") == "1"
     words: list[list[str]] = []
     seq_buffer: deque[np.ndarray] = deque(maxlen=WINDOW_SIZE)
     valid_flag_buffer: deque[bool] = deque(maxlen=WINDOW_SIZE)
@@ -268,15 +282,33 @@ async def jamak(websocket: WebSocket):
                 continue
 
             if not isinstance(data, dict):
+                await _send_debug(
+                    websocket,
+                    debug_enabled,
+                    "ignored",
+                    reason="message_must_be_json_object",
+                )
                 continue
 
             keypoints = data.get("keypoints")
             if keypoints is None:
+                await _send_debug(
+                    websocket,
+                    debug_enabled,
+                    "ignored",
+                    reason="missing_keypoints",
+                )
                 continue
 
             try:
                 payload = np.asarray(keypoints, dtype=np.float32)
             except (TypeError, ValueError):
+                await _send_debug(
+                    websocket,
+                    debug_enabled,
+                    "ignored",
+                    reason="keypoints_must_be_numeric",
+                )
                 continue
 
             frames: list[np.ndarray]
@@ -285,11 +317,26 @@ async def jamak(websocket: WebSocket):
             elif payload.shape == (WINDOW_SIZE, INPUT_SIZE):
                 frames = list(payload)
             else:
+                await _send_debug(
+                    websocket,
+                    debug_enabled,
+                    "ignored",
+                    reason="invalid_keypoints_shape",
+                    shape=list(payload.shape),
+                    expected=[[INPUT_SIZE], [WINDOW_SIZE, INPUT_SIZE]],
+                )
                 continue
 
             for frame_vec in frames:
-                if _are_hands_lowered(frame_vec):
+                if not ignore_hands_down and _are_hands_lowered(frame_vec):
                     hands_down_count += 1
+                    await _send_debug(
+                        websocket,
+                        debug_enabled,
+                        "hands_down",
+                        hands_down_count=hands_down_count,
+                        will_flush=hands_down_count >= CC_HANDS_DOWN_MIN_FRAMES,
+                    )
                     if hands_down_count >= CC_HANDS_DOWN_MIN_FRAMES:
                         words = await _flush_words(
                             websocket,
