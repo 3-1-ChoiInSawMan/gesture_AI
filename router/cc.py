@@ -144,6 +144,19 @@ def _predict_sequence(sequence: list[np.ndarray]) -> list[tuple[int, float]]:
     ]
 
 
+async def _send_debug(websocket: WebSocket, enabled: bool, event: str, **payload) -> None:
+    if not enabled:
+        return
+
+    await websocket.send_json(
+        {
+            "type": "debug",
+            "event": event,
+            **payload,
+        }
+    )
+
+
 def _consume_frame(
     frame_vec: np.ndarray,
     *,
@@ -152,7 +165,7 @@ def _consume_frame(
     pred_history: deque[int],
     last_valid_framevec: np.ndarray,
     frame_count: int,
-) -> tuple[list[str] | None, np.ndarray]:
+) -> tuple[str | None, np.ndarray, dict | None]:
     valid = _is_valid_frame(frame_vec)
 
     if valid:
@@ -166,26 +179,27 @@ def _consume_frame(
     valid_frames = sum(valid_flag_buffer)
     can_predict = len(seq_buffer) == WINDOW_SIZE and valid_frames >= CC_MIN_VALID_FRAMES
     if not can_predict or frame_count % CC_PRED_EVERY_N_FRAMES != 0:
-        return None, last_valid_framevec
+        return None, last_valid_framevec, None
 
-    top_predictions = _predict_sequence(list(seq_buffer))
-    prediction, confidence = top_predictions[0]
-    if confidence < CC_CONF_THRESHOLD:
-        pred_history.append(-1)
-        return None, last_valid_framevec
-
-    pred_history.append(prediction)
+    prediction, confidence = _predict_sequence(list(seq_buffer))
+    accepted = confidence >= CC_CONF_THRESHOLD
+    pred_history.append(prediction if accepted else -1)
+    candidate = idx2label.get(prediction)
 
     voted = _majority_vote(pred_history)
-    if voted is None or voted == -1 or voted != prediction:
-        return None, last_valid_framevec
+    debug = {
+        "frame_count": frame_count,
+        "valid_frames": valid_frames,
+        "candidate": candidate,
+        "confidence": round(confidence, 4),
+        "accepted": accepted,
+        "voted": idx2label.get(voted) if voted is not None and voted != -1 else None,
+    }
 
-    candidates = [
-        idx2label[index]
-        for index, _ in top_predictions
-        if index in idx2label
-    ]
-    return candidates or None, last_valid_framevec
+    if voted is None or voted == -1:
+        return None, last_valid_framevec, debug
+
+    return idx2label.get(voted), last_valid_framevec, debug
 
 
 async def _flush_words(
@@ -211,7 +225,8 @@ async def _flush_words(
 async def jamak(websocket: WebSocket):
     await websocket.accept()
     session_id = websocket.query_params.get("session_id") or str(uuid4())
-    words: list[list[str]] = []
+    debug_enabled = websocket.query_params.get("debug") == "1"
+    words: list[str] = []
     seq_buffer: deque[np.ndarray] = deque(maxlen=WINDOW_SIZE)
     valid_flag_buffer: deque[bool] = deque(maxlen=WINDOW_SIZE)
     pred_history: deque[int] = deque(maxlen=CC_SMOOTHING_WINDOW)
@@ -274,7 +289,7 @@ async def jamak(websocket: WebSocket):
 
                 hands_down_count = 0
                 frame_count += 1
-                candidates, last_valid_framevec = _consume_frame(
+                word, last_valid_framevec, debug = _consume_frame(
                     frame_vec,
                     seq_buffer=seq_buffer,
                     valid_flag_buffer=valid_flag_buffer,
@@ -282,9 +297,18 @@ async def jamak(websocket: WebSocket):
                     last_valid_framevec=last_valid_framevec,
                     frame_count=frame_count,
                 )
+                if debug:
+                    await _send_debug(websocket, debug_enabled, "prediction", **debug)
                 logger.info("읽는중")
-                if candidates and (not words or words[-1][0] != candidates[0]):
-                    words.append(candidates)
+                if word and (not words or words[-1] != word):
+                    words.append(word)
+                    await websocket.send_json(
+                        {
+                            "type": "word",
+                            "word": word,
+                            "words": words,
+                        }
+                    )
                     logger.info("words에 추가")
 
     except WebSocketDisconnect:

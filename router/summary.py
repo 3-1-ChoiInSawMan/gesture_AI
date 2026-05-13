@@ -20,13 +20,13 @@ def summary_meeting(payload: SummaryRequest) -> SummaryResponse:
     if not client:
         raise HTTPException(
             status_code=500,
-            detail="OPENAI_API_KEY가 설정되지 않았습니다.",
+            detail="doesn't exist OPENAI_API_KEY in .env",
         )
 
     if not model_name:
         raise HTTPException(
             status_code=500,
-            detail="MODEL이 설정되지 않았습니다.",
+            detail="doesn't exis MODEL in .env",
         )
 
     messages = load_message(session_id=payload.session_id, limit=payload.limit)
@@ -34,7 +34,7 @@ def summary_meeting(payload: SummaryRequest) -> SummaryResponse:
     if not messages:
         raise HTTPException(
             status_code=404,
-            detail="컬렉션 비어있음",
+            detail="empty collection",
         )
 
     conversation = "\n".join(f"- {message}" for message in messages)
@@ -47,7 +47,7 @@ def summary_meeting(payload: SummaryRequest) -> SummaryResponse:
                 {
                     "role": "user",
                     "content": (
-                        "다음 대화 기록을 보고 한 줄 요약만 반환하세요.\n"
+                        "다음 회의 기록을 보고 한 줄 회의요약록만 반환하세요.\n"
                         f"{conversation}"
                     ),
                 },
