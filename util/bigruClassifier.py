@@ -23,7 +23,7 @@ class BiGRUClassifier(nn.Module):
         )
 
     def forward(self, x):
-        # x: (B, 60, 88)
+        # x: (B, sequence_length, 88)
         out, _ = self.gru(x)
         last = out[:, -1, :]   # (B, hidden_dim*2)
         return self.head(last)
