@@ -181,9 +181,12 @@ def _consume_frame(
     if not can_predict or frame_count % CC_PRED_EVERY_N_FRAMES != 0:
         return None, last_valid_framevec, None
 
-    prediction, confidence = _predict_sequence(list(seq_buffer))
-    accepted = confidence >= CC_CONF_THRESHOLD
-    pred_history.append(prediction if accepted else -1)
+    predictions = _predict_sequence(list(seq_buffer))
+    if not predictions:
+        return None, last_valid_framevec, None
+
+    prediction, confidence = predictions[0]
+
     candidate = idx2label.get(prediction)
 
     voted = _majority_vote(pred_history)
