@@ -165,7 +165,7 @@ def _consume_frame(
     pred_history: deque[int],
     last_valid_framevec: np.ndarray,
     frame_count: int,
-) -> tuple[str | None, np.ndarray, dict | None]:
+) -> tuple[list[str] | None, np.ndarray, dict | None]:
     valid = _is_valid_frame(frame_vec)
 
     if valid:
@@ -186,23 +186,35 @@ def _consume_frame(
         return None, last_valid_framevec, None
 
     prediction, confidence = predictions[0]
+    accepted = confidence >= CC_CONF_THRESHOLD
+    pred_history.append(prediction if accepted else -1)
 
     candidate = idx2label.get(prediction)
+    candidate_words = [
+        word
+        for word in (idx2label.get(prediction) for prediction, _ in predictions)
+        if word
+    ]
 
     voted = _majority_vote(pred_history)
+    voted_word = idx2label.get(voted) if voted is not None and voted != -1 else None
     debug = {
         "frame_count": frame_count,
         "valid_frames": valid_frames,
         "candidate": candidate,
+        "candidates": candidate_words,
         "confidence": round(confidence, 4),
         "accepted": accepted,
-        "voted": idx2label.get(voted) if voted is not None and voted != -1 else None,
+        "voted": voted_word,
     }
 
-    if voted is None or voted == -1:
+    if not voted_word:
         return None, last_valid_framevec, debug
 
-    return idx2label.get(voted), last_valid_framevec, debug
+    word_candidates = [voted_word] + [
+        word for word in candidate_words if word != voted_word
+    ]
+    return word_candidates, last_valid_framevec, debug
 
 
 async def _flush_words(
@@ -229,7 +241,7 @@ async def jamak(websocket: WebSocket):
     await websocket.accept()
     session_id = websocket.query_params.get("session_id") or str(uuid4())
     debug_enabled = websocket.query_params.get("debug") == "1"
-    words: list[str] = []
+    words: list[list[str]] = []
     seq_buffer: deque[np.ndarray] = deque(maxlen=WINDOW_SIZE)
     valid_flag_buffer: deque[bool] = deque(maxlen=WINDOW_SIZE)
     pred_history: deque[int] = deque(maxlen=CC_SMOOTHING_WINDOW)
@@ -292,7 +304,7 @@ async def jamak(websocket: WebSocket):
 
                 hands_down_count = 0
                 frame_count += 1
-                word, last_valid_framevec, debug = _consume_frame(
+                word_candidates, last_valid_framevec, debug = _consume_frame(
                     frame_vec,
                     seq_buffer=seq_buffer,
                     valid_flag_buffer=valid_flag_buffer,
@@ -303,13 +315,17 @@ async def jamak(websocket: WebSocket):
                 if debug:
                     await _send_debug(websocket, debug_enabled, "prediction", **debug)
                 logger.info("읽는중")
-                if word and (not words or words[-1] != word):
-                    words.append(word)
+                if word_candidates and (
+                    not words or words[-1][0] != word_candidates[0]
+                ):
+                    words.append(word_candidates)
+                    top_words = [candidates[0] for candidates in words if candidates]
                     await websocket.send_json(
                         {
                             "type": "word",
-                            "word": word,
-                            "words": words,
+                            "word": word_candidates[0],
+                            "words": top_words,
+                            "word_candidates": words,
                         }
                     )
                     logger.info("words에 추가")
