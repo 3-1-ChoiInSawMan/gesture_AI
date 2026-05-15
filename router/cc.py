@@ -314,7 +314,7 @@ async def jamak(websocket: WebSocket):
             frames: list[np.ndarray]
             if payload.shape == (INPUT_SIZE,):
                 frames = [payload]
-            elif payload.shape == (WINDOW_SIZE, INPUT_SIZE):
+            elif payload.ndim == 2 and payload.shape[1] == INPUT_SIZE:
                 frames = list(payload)
             else:
                 await _send_debug(
@@ -323,21 +323,28 @@ async def jamak(websocket: WebSocket):
                     "ignored",
                     reason="invalid_keypoints_shape",
                     shape=list(payload.shape),
-                    expected=[[INPUT_SIZE], [WINDOW_SIZE, INPUT_SIZE]],
+                    expected=[[INPUT_SIZE], ["N", INPUT_SIZE]],
                 )
                 continue
 
             for frame_vec in frames:
-                if not ignore_hands_down and _are_hands_lowered(frame_vec):
+                hands_lowered = (
+                    not ignore_hands_down and _are_hands_lowered(frame_vec)
+                )
+                if hands_lowered:
                     hands_down_count += 1
+                    should_flush = (
+                        hands_down_count >= CC_HANDS_DOWN_MIN_FRAMES
+                        and bool(words)
+                    )
                     await _send_debug(
                         websocket,
                         debug_enabled,
                         "hands_down",
                         hands_down_count=hands_down_count,
-                        will_flush=hands_down_count >= CC_HANDS_DOWN_MIN_FRAMES,
+                        will_flush=should_flush,
                     )
-                    if hands_down_count >= CC_HANDS_DOWN_MIN_FRAMES:
+                    if should_flush:
                         words = await _flush_words(
                             websocket,
                             session_id,
@@ -347,9 +354,10 @@ async def jamak(websocket: WebSocket):
                         seq_buffer.clear()
                         valid_flag_buffer.clear()
                         pred_history.clear()
-                    continue
+                        continue
 
-                hands_down_count = 0
+                if not hands_lowered:
+                    hands_down_count = 0
                 frame_count += 1
                 word_candidates, last_valid_framevec, debug = _consume_frame(
                     frame_vec,
