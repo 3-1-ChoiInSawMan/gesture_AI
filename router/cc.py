@@ -235,7 +235,9 @@ async def _flush_words(
     session_id: str,
     words: list[list[str]],
     *,
-    emit: bool, ) -> list[list[str]]:
+    emit: bool,
+    call_room_idx: object | None = None,
+) -> list[list[str]]:
     if not words:
         return []
 
@@ -244,7 +246,14 @@ async def _flush_words(
     await asyncio.to_thread(store_final_sentence, session_id, sentence, finalized_words)
 
     if emit and sentence:
-        await websocket.send_text(sentence)
+        await websocket.send_json(
+            {
+                "type": "sentence",
+                "sentence": sentence,
+                "text": sentence,
+                "callRoomIdx": call_room_idx,
+            }
+        )
 
     return []
 
@@ -262,6 +271,7 @@ async def jamak(websocket: WebSocket):
     last_valid_framevec = np.zeros((INPUT_SIZE,), dtype=np.float32)
     frame_count = 0
     hands_down_count = 0
+    call_room_idx = websocket.query_params.get("callRoomIdx")
 
     try:
         while True:
@@ -277,8 +287,9 @@ async def jamak(websocket: WebSocket):
                     session_id,
                     words,
                     emit=True,
+                    call_room_idx=call_room_idx,
                 )
-                logger.info("소켓끊김")
+                
                 continue
 
             if not isinstance(data, dict):
@@ -289,6 +300,9 @@ async def jamak(websocket: WebSocket):
                     reason="message_must_be_json_object",
                 )
                 continue
+
+            if "callRoomIdx" in data:
+                call_room_idx = data.get("callRoomIdx")
 
             keypoints = data.get("keypoints")
             if keypoints is None:
@@ -350,6 +364,7 @@ async def jamak(websocket: WebSocket):
                             session_id,
                             words,
                             emit=True,
+                            call_room_idx=call_room_idx,
                         )
                         seq_buffer.clear()
                         valid_flag_buffer.clear()
@@ -381,6 +396,7 @@ async def jamak(websocket: WebSocket):
                             "word": word_candidates[0],
                             "words": top_words,
                             "word_candidates": words,
+                            "callRoomIdx": call_room_idx,
                         }
                     )
                     logger.info("words에 추가")
@@ -391,5 +407,6 @@ async def jamak(websocket: WebSocket):
             session_id,
             words,
             emit=False,
+            call_room_idx=call_room_idx,
         )
         logger.info("소켓끊김")
