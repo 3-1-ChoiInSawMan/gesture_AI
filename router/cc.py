@@ -304,13 +304,13 @@ async def jamak(websocket: WebSocket):
             if "callRoomIdx" in data:
                 call_room_idx = data.get("callRoomIdx")
 
-            keypoints = data.get("keypoints")
+            keypoints = data.get("keypoints", data.get("frame"))
             if keypoints is None:
                 await _send_debug(
                     websocket,
                     debug_enabled,
                     "ignored",
-                    reason="missing_keypoints",
+                    reason="missing_keypoints_or_frame",
                 )
                 continue
 
