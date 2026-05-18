@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections import Counter, deque
 from pathlib import Path
 from uuid import uuid4
@@ -157,6 +158,23 @@ async def _send_debug(websocket: WebSocket, enabled: bool, event: str, **payload
     )
 
 
+def _extract_keypoints_payload(data: dict) -> object | None:
+    keypoints = data.get("keypoints")
+    if keypoints is None:
+        keypoints = data.get("frame")
+
+    if isinstance(keypoints, str):
+        try:
+            keypoints = json.loads(keypoints)
+        except json.JSONDecodeError:
+            return keypoints
+
+    if isinstance(keypoints, dict):
+        return _extract_keypoints_payload(keypoints)
+
+    return keypoints
+
+
 def _consume_frame(
     frame_vec: np.ndarray,
     *,
@@ -304,7 +322,7 @@ async def jamak(websocket: WebSocket):
             if "callRoomIdx" in data:
                 call_room_idx = data.get("callRoomIdx")
 
-            keypoints = data.get("keypoints", data.get("frame"))
+            keypoints = _extract_keypoints_payload(data)
             if keypoints is None:
                 await _send_debug(
                     websocket,
