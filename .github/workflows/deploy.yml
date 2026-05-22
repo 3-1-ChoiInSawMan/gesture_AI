@@ -13,14 +13,14 @@ jobs:
       - name: Pull latest code
         shell: powershell
         run: |
-          cd C:\Users\pc\Desktop\ingyu\gesture_AI
+          cd C:\gesture_AI
           git fetch origin main
           git reset --hard origin/main
 
       - name: Install dependencies
         shell: powershell
         run: |
-          cd C:\Users\pc\Desktop\ingyu\gesture_AI
+          cd C:\gesture_AI
           .\.venv\Scripts\pip.exe install -r requirements.txt
 
       - name: Stop old server
