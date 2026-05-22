@@ -16,14 +16,15 @@ from util.config import (
     CC_HANDS_DOWN_MIN_FRAMES,
     CC_HANDS_DOWN_RATIO,
     CC_MIN_VALID_FRAMES,
+    CC_NO_GESTURE_MIN_FRAMES,
     CC_PRED_EVERY_N_FRAMES,
+    CC_SILENCE_TIMEOUT_SECONDS,
     CC_SMOOTHING_WINDOW,
     CC_TOP_K,
     HIDDEN_SIZE,
     INPUT_SIZE,
     NUM_CLASSES,
     NUM_LAYERS,
-    SILENCE_TIMEOUT_SECONDS,
     WINDOW_SIZE,
     LABEL2IDX  
 )
@@ -272,7 +273,7 @@ async def _flush_words(
                 "callRoomIdx": call_room_idx,
             }
         )
-
+    logger.info("문장 반환됨")
     return []
 
 
@@ -289,6 +290,7 @@ async def jamak(websocket: WebSocket):
     last_valid_framevec = np.zeros((INPUT_SIZE,), dtype=np.float32)
     frame_count = 0
     hands_down_count = 0
+    no_gesture_count = 0
     call_room_idx = websocket.query_params.get("callRoomIdx")
 
     try:
@@ -296,7 +298,7 @@ async def jamak(websocket: WebSocket):
             try:
                 data = await asyncio.wait_for(
                     websocket.receive_json(),
-                    timeout=SILENCE_TIMEOUT_SECONDS,
+                    timeout=CC_SILENCE_TIMEOUT_SECONDS,
                 )
                 logger.info("소켓연결")
             except asyncio.TimeoutError:
@@ -360,6 +362,36 @@ async def jamak(websocket: WebSocket):
                 continue
 
             for frame_vec in frames:
+                valid_frame = _is_valid_frame(frame_vec)
+                if valid_frame:
+                    no_gesture_count = 0
+                else:
+                    no_gesture_count += 1
+                    should_flush_no_gesture = (
+                        no_gesture_count >= CC_NO_GESTURE_MIN_FRAMES
+                        and bool(words)
+                    )
+                    await _send_debug(
+                        websocket,
+                        debug_enabled,
+                        "no_gesture",
+                        no_gesture_count=no_gesture_count,
+                        will_flush=should_flush_no_gesture,
+                    )
+                    if should_flush_no_gesture:
+                        words = await _flush_words(
+                            websocket,
+                            session_id,
+                            words,
+                            emit=True,
+                            call_room_idx=call_room_idx,
+                        )
+                        seq_buffer.clear()
+                        valid_flag_buffer.clear()
+                        pred_history.clear()
+                        hands_down_count = 0
+                        continue
+
                 hands_lowered = (
                     not ignore_hands_down and _are_hands_lowered(frame_vec)
                 )
