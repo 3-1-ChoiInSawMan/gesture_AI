@@ -218,6 +218,9 @@ def main():
 
     print("classes:", label2idx)
     print("train:", len(train_samples), "val:", len(val_samples), "test:", len(test_samples))
+    print()
+    print(torch.cuda.is_available() if torch.cuda.is_available() else "cpu")
+    print(torch.cuda.get_device_name(0))
 
     train_ds = GestureDataset(train_samples, seq_len=SEQ_LEN, augment=True)
     val_ds = GestureDataset(val_samples, seq_len=SEQ_LEN, augment=False)
