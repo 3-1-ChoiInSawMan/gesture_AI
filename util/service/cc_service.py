@@ -1,8 +1,8 @@
 import json
 import os
+import time
 import urllib.error
 import urllib.request
-from datetime import UTC, datetime
 
 from util.loadLogger import logger
 
@@ -35,11 +35,53 @@ def build_sentence_prompt(word_candidates: list[list[str]]) -> str:
     )
 
 
+def _ollama_option_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        logger.warning("%s must be an integer; using %s.", name, default)
+        return default
+
+
+def _ollama_option_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        logger.warning("%s must be a number; using %s.", name, default)
+        return default
+
+
+def _duration_seconds(data: dict, key: str) -> float | None:
+    duration = data.get(key)
+    if not isinstance(duration, (int, float)):
+        return None
+    return duration / 1_000_000_000
+
+
+def _log_ollama_metrics(data: dict, wall_seconds: float, *, source: str) -> None:
+    logger.info(
+        "Ollama %s latency wall=%.3fs total=%s load=%s prompt_eval=%s eval=%s",
+        source,
+        wall_seconds,
+        _format_duration(_duration_seconds(data, "total_duration")),
+        _format_duration(_duration_seconds(data, "load_duration")),
+        _format_duration(_duration_seconds(data, "prompt_eval_duration")),
+        _format_duration(_duration_seconds(data, "eval_duration")),
+    )
+
+
+def _format_duration(duration: float | None) -> str:
+    if duration is None:
+        return "n/a"
+    return f"{duration:.3f}s"
+
+
 def _ollama_chat(
     *,
     model_name: str,
     system_prompt: str,
     user_prompt: str,
+    source: str,
 ) -> str:
     base_url = os.getenv("OLLAMA_BASE_URL", OLLAMA_DEFAULT_BASE_URL).rstrip("/")
     timeout = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "30"))
@@ -47,9 +89,12 @@ def _ollama_chat(
     payload = {
         "model": model_name,
         "stream": False,
+        "think": False,
         "keep_alive": keep_alive,
         "options": {
-            "temperature": 0.2,
+            "temperature": _ollama_option_float("OLLAMA_TEMPERATURE", 0.0),
+            "num_predict": _ollama_option_int("OLLAMA_NUM_PREDICT", 64),
+            "num_ctx": _ollama_option_int("OLLAMA_NUM_CTX", 4096),
         },
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -63,8 +108,10 @@ def _ollama_chat(
         method="POST",
     )
 
+    started_at = time.perf_counter()
     with urllib.request.urlopen(request, timeout=timeout) as response:
         data = json.loads(response.read().decode("utf-8"))
+    _log_ollama_metrics(data, time.perf_counter() - started_at, source=source)
 
     return data.get("message", {}).get("content", "").strip()
 
@@ -85,6 +132,7 @@ def generate_sentence_from_words(word_candidates: list[list[str]]) -> str:
             model_name=model_name,
             system_prompt=CC_SENTENCE_SYSTEM_PROMPT,
             user_prompt=build_sentence_prompt(word_candidates),
+            source="sentence",
         )
     except (
         urllib.error.URLError,
@@ -98,6 +146,34 @@ def generate_sentence_from_words(word_candidates: list[list[str]]) -> str:
         return fallback_sentence
 
     return sentence or fallback_sentence
+
+
+def warmup_sentence_model() -> None:
+    model_name = os.getenv("OLLAMA_MODEL")
+
+    if not model_name:
+        logger.info("OLLAMA_MODEL is not configured; skipping Ollama warmup.")
+        return
+
+    try:
+        _ollama_chat(
+            model_name=model_name,
+            system_prompt="Reply with OK only.",
+            user_prompt="warmup",
+            source="warmup",
+        )
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        logger.warning("Ollama warmup failed: %s", exc)
+        return
+
+    logger.info("Ollama warmup complete")
 
 
 def store_final_sentence(
