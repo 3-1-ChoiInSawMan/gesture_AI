@@ -1,5 +1,6 @@
 import asyncio
 import io
+import wave
 
 from util.ssl_config import configure_system_truststore
 configure_system_truststore()
@@ -19,15 +20,17 @@ from util.config import (
     STT_LANGUAGE,
     STT_WINDOW_SIZE,
 )
-from util.mongo_connect import col
 
 from util.loadLogger import logger
 logger.info("cc_stt router 로딩됨")
 
 router = APIRouter()
-device = "cuda" if torch.cuda.is_available() else "cpu"
-compute_type = "float16" if device == "cuda" else "int8"
-model = WhisperModel("medium", device=device, compute_type=compute_type)
+model = WhisperModel(
+    "deepdml/faster-whisper-large-v3-turbo-ct2",
+    device="cuda" if torch.cuda.is_available() else "cpu",
+    compute_type="float16",
+    num_workers=1
+    )
 
 @dataclass
 class STTSessionState:
@@ -70,22 +73,6 @@ def _find_incremental_text(previous_text: str, current_text: str) -> str:
             return current_text[overlap:].strip()
 
     return current_text
-
-
-def _store_final_subtitle(session_id: str, finalized_tokens: list[str]) -> None:
-    finalized_text = " ".join(finalized_tokens).strip()
-    if not finalized_text:
-        return
-
-    col.insert_one(
-        {
-            "session_id": session_id,
-            "text": finalized_text,
-            "source": "stt",
-            "is_final": True,
-            "created_at": datetime.now(UTC),
-        }
-    )
 
 
 def _transcribe_audio(audio_bytes: bytes) -> str:
@@ -185,8 +172,6 @@ async def stt_cc(ws: WebSocket):
                 async with state_lock:
                     finalized_tokens = _finalize_tokens(state)
                     _reset_utterance_state(state)
-
-                await asyncio.to_thread(_store_final_subtitle, session_id, finalized_tokens)
                 continue
 
             if not data:
@@ -200,7 +185,6 @@ async def stt_cc(ws: WebSocket):
             finalized_tokens = _finalize_tokens(state)
             _reset_utterance_state(state)
 
-        await asyncio.to_thread(_store_final_subtitle, session_id, finalized_tokens)
     finally:
         inference_task.cancel()
         try:
