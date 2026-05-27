@@ -261,6 +261,7 @@ async def _flush_words(
         return []
 
     finalized_words = list(words)
+    logger.info("Flushing %s CC words for session=%s", len(finalized_words), session_id)
     sentence = await asyncio.to_thread(generate_sentence_from_words, finalized_words)
     await asyncio.to_thread(store_final_sentence, session_id, sentence, finalized_words)
 
@@ -292,6 +293,11 @@ async def jamak(websocket: WebSocket):
     hands_down_count = 0
     no_gesture_count = 0
     call_room_idx = websocket.query_params.get("callRoomIdx")
+    logger.info(
+        "CC websocket accepted session=%s silence_timeout=%.2fs",
+        session_id,
+        CC_SILENCE_TIMEOUT_SECONDS,
+    )
 
     try:
         while True:
@@ -300,8 +306,16 @@ async def jamak(websocket: WebSocket):
                     websocket.receive_json(),
                     timeout=CC_SILENCE_TIMEOUT_SECONDS,
                 )
-                logger.info("소켓연결")
+                if debug_enabled:
+                    logger.debug("CC websocket frame received session=%s", session_id)
             except asyncio.TimeoutError:
+                if debug_enabled:
+                    logger.debug(
+                        "CC silence timeout session=%s words=%s timeout=%.2fs",
+                        session_id,
+                        len(words),
+                        CC_SILENCE_TIMEOUT_SECONDS,
+                    )
                 words = await _flush_words(
                     websocket,
                     session_id,
@@ -434,7 +448,8 @@ async def jamak(websocket: WebSocket):
                 )
                 if debug:
                     await _send_debug(websocket, debug_enabled, "prediction", **debug)
-                logger.info("읽는중")
+                if debug_enabled:
+                    logger.debug("CC frame processed session=%s frame=%s", session_id, frame_count)
                 if word_candidates and (
                     not words or words[-1][0] != word_candidates[0]
                 ):
