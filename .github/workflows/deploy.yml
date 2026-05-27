@@ -10,12 +10,12 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      - name: Pull latest code
+      - name: Deploy
         shell: powershell
         run: |
           cd C:\gesture_AI
           git fetch origin main
-          git reset --hard origin/main
+          git reset --hard FETCH_HEAD
 
       - name: Install dependencies
         shell: powershell

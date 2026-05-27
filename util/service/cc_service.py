@@ -5,7 +5,6 @@ import urllib.request
 from datetime import UTC, datetime
 
 from util.loadLogger import logger
-from util.mongo_connect import col
 
 OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434"
 OLLAMA_CHAT_PATH = "/api/chat"
@@ -107,20 +106,4 @@ def store_final_sentence(
     word_candidates: list[list[str]],
 ) -> None:
     if not sentence:
-        return
-
-    try:
-        col.insert_one(
-            {
-                "session_id": session_id,
-                "text": sentence,
-                "source": "cc",
-                "is_final": True,
-                "words": word_candidates,
-                "top_words": [candidates[0] for candidates in word_candidates if candidates],
-                "created_at": datetime.now(UTC),
-            }
-        )
-    except Exception as exc:
-        logger.warning("Failed to store CC sentence: %s", exc)
         return
