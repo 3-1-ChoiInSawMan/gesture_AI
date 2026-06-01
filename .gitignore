@@ -4,3 +4,7 @@ __pycache__
 frontend/
 dataset_30/
 logs/
+notebook/
+
+.agents/
+.codex/
