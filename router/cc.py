@@ -8,6 +8,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 
 from util.bigruClassifier import BiGRUClassifier
 from util.config import (
@@ -62,6 +63,35 @@ else:
 
 model.to(device)
 model.eval()
+
+
+# Request/Response models
+class GenerateSentenceRequest(BaseModel):
+    text: str
+    callRoomIdx: int | None = None
+
+
+class GenerateSentenceResponse(BaseModel):
+    sentence: str
+    callRoomIdx: int | None = None
+
+
+def _parse_word_candidates(text: str) -> list[list[str]]:
+    """
+    텍스트 형식을 파싱하여 word_candidates 형식으로 변환
+    입력 형식: "아빠_아버지 좋다_나쁘지않다 있다_존재하다_가지고있다"
+    출력 형식: [["아빠", "아버지"], ["좋다", "나쁘지않다"], ["있다", "존재하다", "가지고있다"]]
+    """
+    if not text or not text.strip():
+        return []
+    
+    candidates = []
+    for word_group in text.strip().split():
+        if word_group:
+            word_list = word_group.split("_")
+            candidates.append(word_list)
+    
+    return candidates
 
 
 def _normalize_sequence(sequence: np.ndarray) -> np.ndarray:
@@ -475,3 +505,44 @@ async def jamak(websocket: WebSocket):
             call_room_idx=call_room_idx,
         )
         logger.info("소켓끊김")
+
+
+@router.post("/cc/sentence", response_model=GenerateSentenceResponse)
+async def generate_sentence(request: GenerateSentenceRequest) -> GenerateSentenceResponse:
+    """
+    텍스트를 받아 word_candidates로 파싱한 후 올라마를 통해 문장 생성
+    
+    요청 예시:
+    {
+        "text": "아빠_아버지 좋다_나쁘지않다 있다_존재하다_가지고있다",
+        "callRoomIdx": 46
+    }
+    """
+    logger.info("Generate sentence request received: text=%s, callRoomIdx=%s", request.text, request.callRoomIdx)
+    
+    # 텍스트 파싱
+    word_candidates = _parse_word_candidates(request.text)
+    logger.info("Parsed word_candidates: %s", word_candidates)
+    
+    if not word_candidates:
+        logger.warning("No word candidates parsed from text")
+        return GenerateSentenceResponse(
+            sentence="",
+            callRoomIdx=request.callRoomIdx
+        )
+    
+    # 문장 생성
+    try:
+        sentence = await asyncio.to_thread(generate_sentence_from_words, word_candidates)
+        logger.info("Generated sentence: %s", sentence)
+    except Exception as exc:
+        logger.error("Error generating sentence: %s", exc)
+        return GenerateSentenceResponse(
+            sentence="",
+            callRoomIdx=request.callRoomIdx
+        )
+    
+    return GenerateSentenceResponse(
+        sentence=sentence,
+        callRoomIdx=request.callRoomIdx
+    )
