@@ -16,6 +16,10 @@ CC_SENTENCE_SYSTEM_PROMPT = (
 )
 
 
+class OllamaRequestError(Exception):
+    pass
+
+
 def _fallback_from_candidates(word_candidates: list[list[str]]) -> str:
     return " ".join(candidates[0] for candidates in word_candidates if candidates).strip()
 
@@ -49,6 +53,30 @@ def _ollama_option_float(name: str, default: float) -> float:
     except ValueError:
         logger.warning("%s must be a number; using %s.", name, default)
         return default
+
+
+def _ollama_think_value() -> bool | str | None:
+    value = os.getenv("OLLAMA_THINK")
+    if value is None or not value.strip():
+        return None
+
+    normalized = value.strip().lower()
+    if normalized in {"true", "1", "yes", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "off"}:
+        return False
+    if normalized in {"high", "medium", "low"}:
+        return normalized
+
+    logger.warning("OLLAMA_THINK must be true, false, high, medium, or low; omitting it.")
+    return None
+
+
+def _read_http_error_body(exc: urllib.error.HTTPError) -> str:
+    try:
+        return exc.read().decode("utf-8", errors="replace").strip()
+    except Exception:
+        return ""
 
 
 def _duration_seconds(data: dict, key: str) -> float | None:
@@ -89,7 +117,6 @@ def _ollama_chat(
     payload = {
         "model": model_name,
         "stream": False,
-        "think": False,
         "keep_alive": keep_alive,
         "options": {
             "temperature": _ollama_option_float("OLLAMA_TEMPERATURE", 0.0),
@@ -101,6 +128,10 @@ def _ollama_chat(
             {"role": "user", "content": user_prompt},
         ],
     }
+    think = _ollama_think_value()
+    if think is not None:
+        payload["think"] = think
+
     request = urllib.request.Request(
         f"{base_url}{OLLAMA_CHAT_PATH}",
         data=json.dumps(payload).encode("utf-8"),
@@ -109,8 +140,14 @@ def _ollama_chat(
     )
 
     started_at = time.perf_counter()
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        data = json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = _read_http_error_body(exc)
+        detail = f": {body}" if body else ""
+        raise OllamaRequestError(f"Ollama HTTP {exc.code} {exc.reason}{detail}") from exc
+
     _log_ollama_metrics(data, time.perf_counter() - started_at, source=source)
 
     return data.get("message", {}).get("content", "").strip()
@@ -141,6 +178,7 @@ def generate_sentence_from_words(word_candidates: list[list[str]]) -> str:
         KeyError,
         TypeError,
         ValueError,
+        OllamaRequestError,
     ) as exc:
         logger.warning("Ollama sentence generation failed: %s", exc)
         return fallback_sentence
@@ -169,6 +207,7 @@ def warmup_sentence_model() -> None:
         KeyError,
         TypeError,
         ValueError,
+        OllamaRequestError,
     ) as exc:
         logger.warning("Ollama warmup failed: %s", exc)
         return
