@@ -103,6 +103,19 @@ def _format_duration(duration: float | None) -> str:
         return "n/a"
     return f"{duration:.3f}s"
 
+def _ollama_keep_alive_value(value: str):
+    value = value.strip()
+
+    # JSON number로 보내야 하는 값
+    if value in {"-1", "0"}:
+        return int(value)
+
+    # 60, 3600 같은 초 단위 숫자도 number로 보낼 수 있음
+    if value.lstrip("-").isdigit():
+        return int(value)
+
+    # 30m, 5m, 24h, -1m 같은 duration 문자열
+    return value
 
 def _ollama_chat(
     *,
@@ -113,7 +126,8 @@ def _ollama_chat(
 ) -> str:
     base_url = os.getenv("OLLAMA_BASE_URL", OLLAMA_DEFAULT_BASE_URL).rstrip("/")
     timeout = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "30"))
-    keep_alive = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+    keep_alive = _ollama_keep_alive_value(os.getenv("OLLAMA_KEEP_ALIVE", "30m"))
+
     payload = {
         "model": model_name,
         "stream": False,
@@ -124,17 +138,18 @@ def _ollama_chat(
             "num_ctx": _ollama_option_int("OLLAMA_NUM_CTX", 4096),
         },
         "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
+            {"role": "system", "content": system_prompt or ""},
+            {"role": "user", "content": user_prompt or ""},
         ],
     }
+
     think = _ollama_think_value()
     if think is not None:
         payload["think"] = think
 
     request = urllib.request.Request(
         f"{base_url}{OLLAMA_CHAT_PATH}",
-        data=json.dumps(payload).encode("utf-8"),
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
     )

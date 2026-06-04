@@ -36,7 +36,7 @@ logger.info("cc router 로딩됨")
 router = APIRouter()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model_path = Path(__file__).resolve().parent.parent / "weights" / "best_bigru30.pt"
+model_path = Path(__file__).resolve().parent.parent / "weights" / "best_bigru.pt"
 checkpoint = torch.load(model_path, map_location=device)
 
 if isinstance(checkpoint, dict) and "idx2label" in checkpoint:
