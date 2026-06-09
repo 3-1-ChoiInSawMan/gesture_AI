@@ -5,7 +5,12 @@ from collections import defaultdict
 import numpy as np
 import torch
 import torch.nn as nn
+import matplotlib.pyplot as plt
 from torch.utils.data import Dataset, DataLoader
+
+
+plt.rcParams["font.family"] = "NanumGothic"
+plt.rcParams["axes.unicode_minus"] = False
 
 
 # =========================
@@ -218,6 +223,9 @@ def main():
 
     print("classes:", label2idx)
     print("train:", len(train_samples), "val:", len(val_samples), "test:", len(test_samples))
+    print()
+    print(torch.cuda.is_available() if torch.cuda.is_available() else "cpu")
+    print(torch.cuda.get_device_name(0))
 
     train_ds = GestureDataset(train_samples, seq_len=SEQ_LEN, augment=True)
     val_ds = GestureDataset(val_samples, seq_len=SEQ_LEN, augment=False)
@@ -307,12 +315,25 @@ def main():
     print(f"test_acc ={test_acc:.4f}")
 
     try:
-        from sklearn.metrics import classification_report, confusion_matrix
+        from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
+
+        labels = list(range(len(idx2label)))
+        display_labels = [idx2label[i] for i in labels]
+
         print("\n[Classification Report]")
-        print(classification_report(y_true, y_pred, target_names=[idx2label[i] for i in range(len(idx2label))], zero_division=0))
+        print(classification_report(y_true, y_pred, labels=labels, target_names=display_labels, zero_division=0))
 
         print("\n[Confusion Matrix]")
-        print(confusion_matrix(y_true, y_pred))
+        cm = confusion_matrix(y_true, y_pred, labels=labels)
+        print(cm)
+
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=display_labels)
+        fig, ax = plt.subplots(figsize=(10, 10))
+        disp.plot(ax=ax, xticks_rotation=90, cmap="Blues", colorbar=False)
+        plt.tight_layout()
+        plt.savefig("confusion_matrix.png", dpi=200, bbox_inches="tight")
+        plt.close(fig)
+        print("saved: confusion_matrix.png")
     except Exception as e:
         print("sklearn report skip:", e)
 
