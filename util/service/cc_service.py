@@ -9,10 +9,9 @@ from util.loadLogger import logger
 OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434"
 OLLAMA_CHAT_PATH = "/api/chat"
 CC_SENTENCE_SYSTEM_PROMPT = (
-    "당신은 수어 인식 후보 단어들을 자연스러운 한국어 문장으로 복원하는 비서입니다. "
-    "각 번호마다 시간 순서대로 top3 후보 단어들이 주어집니다. "
-    "후보 중 문맥상 가장 그럴듯한 단어를 고르고, 조사와 어미를 자연스럽게 보완해 "
-    "한국어 문장 한 문장만 반환하세요. 설명, 따옴표, 번호, 불필요한 형식은 쓰지 마세요."
+    "당신은 수어 인식 단어를 문장으로 만드는 한국어 전문가입니다. "
+    "주어진 단어들을 조사와 어미를 추가하여 자연스러운 한국어 한 문장으로만 변환합니다. "
+    "문장만 반환하고 설명이나 주석은 절대 포함하지 마세요."
 )
 
 
@@ -25,18 +24,43 @@ def _fallback_from_candidates(word_candidates: list[list[str]]) -> str:
 
 
 def build_sentence_prompt(word_candidates: list[list[str]]) -> str:
-    candidate_lines = "\n".join(
-        f"{index}. 후보: {', '.join(candidates)}"
-        for index, candidates in enumerate(word_candidates, start=1)
+    """
+    프롬프트 구성:
+    - 주요 단어: 각 수어마다 top1 단어 (가장 유력한)
+    - 백업 단어: top2/3 단어들 (필요시 참고)
+    
+    이렇게 하면 모델이 top1을 우선으로 사용하고, 
+    필요한 경우에만 백업을 참고하여 문맥상 맞는 선택을 할 수 있음
+    """
+    # 주요 단어: 각 그룹의 첫 번째(top1)
+    main_words = [
+        candidates[0] 
+        for candidates in word_candidates 
         if candidates
+    ]
+    
+    # 백업 단어: 각 그룹의 2번째 이후(top2/3)
+    backup_items = []
+    for idx, candidates in enumerate(word_candidates):
+        if len(candidates) > 1:
+            main_word = candidates[0]
+            alternatives = ", ".join(candidates[1:])
+            backup_items.append(f"- {main_word} 대신: {alternatives}")
+    
+    backup_section = "\n".join(backup_items) if backup_items else ""
+    
+    prompt = (
+        "다음 주요 단어들을 사용하여 자연스러운 한국어 문장 한 문장을 만들어주세요.\n"
+        "주요 단어를 최우선으로 사용하되, 문맥상 필요하면 백업 단어를 참고해도 됩니다.\n\n"
+        "주요 단어:\n"
+        f"{' '.join(main_words)}\n"
     )
-    return (
-        "다음은 시간 순서대로 인식된 수어 후보 단어입니다.\n"
-        "각 번호에서 후보 하나를 선택하고, 필요한 조사와 어미를 보완해서 "
-        "가장 자연스러운 한국어 한 문장으로 만들어 주세요.\n"
-        "단어를 그대로 나열하지 말고 문장처럼 다듬어 주세요.\n"
-        f"{candidate_lines}"
-    )
+    
+    if backup_section:
+        prompt += f"\n백업 단어 (필요시만 사용):\n{backup_section}\n"
+    
+    prompt += "\n한 문장만 반환하세요."
+    return prompt
 
 
 def _ollama_option_int(name: str, default: int) -> int:
@@ -103,6 +127,19 @@ def _format_duration(duration: float | None) -> str:
         return "n/a"
     return f"{duration:.3f}s"
 
+def _ollama_keep_alive_value(value: str):
+    value = value.strip()
+
+    # JSON number로 보내야 하는 값
+    if value in {"-1", "0"}:
+        return int(value)
+
+    # 60, 3600 같은 초 단위 숫자도 number로 보낼 수 있음
+    if value.lstrip("-").isdigit():
+        return int(value)
+
+    # 30m, 5m, 24h, -1m 같은 duration 문자열
+    return value
 
 def _ollama_chat(
     *,
@@ -113,28 +150,32 @@ def _ollama_chat(
 ) -> str:
     base_url = os.getenv("OLLAMA_BASE_URL", OLLAMA_DEFAULT_BASE_URL).rstrip("/")
     timeout = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "30"))
-    keep_alive = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+    keep_alive = _ollama_keep_alive_value(os.getenv("OLLAMA_KEEP_ALIVE", "30m"))
+
     payload = {
         "model": model_name,
         "stream": False,
         "keep_alive": keep_alive,
         "options": {
-            "temperature": _ollama_option_float("OLLAMA_TEMPERATURE", 0.0),
-            "num_predict": _ollama_option_int("OLLAMA_NUM_PREDICT", 64),
+            "temperature": _ollama_option_float("OLLAMA_TEMPERATURE", 0.3),
+            "num_predict": _ollama_option_int("OLLAMA_NUM_PREDICT", 512),
             "num_ctx": _ollama_option_int("OLLAMA_NUM_CTX", 4096),
         },
         "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
+            {"role": "system", "content": system_prompt or ""},
+            {"role": "user", "content": user_prompt or ""},
         ],
     }
+
     think = _ollama_think_value()
     if think is not None:
         payload["think"] = think
+    else:
+        payload["think"] = False
 
     request = urllib.request.Request(
         f"{base_url}{OLLAMA_CHAT_PATH}",
-        data=json.dumps(payload).encode("utf-8"),
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
@@ -150,7 +191,10 @@ def _ollama_chat(
 
     _log_ollama_metrics(data, time.perf_counter() - started_at, source=source)
 
-    return data.get("message", {}).get("content", "").strip()
+    logger.info("Ollama %s full response: %s", source, json.dumps(data, ensure_ascii=False))
+    response_text = data.get("message", {}).get("content", "").strip()
+    logger.info("Ollama %s raw response: %r", source, response_text)
+    return response_text
 
 
 def generate_sentence_from_words(word_candidates: list[list[str]]) -> str:
