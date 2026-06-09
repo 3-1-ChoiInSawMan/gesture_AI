@@ -157,6 +157,13 @@ async def _run_inference_loop(
 async def stt_cc(ws: WebSocket):
     await ws.accept()
     session_id = ws.query_params.get("session_id") or str(uuid4())
+    call_room_idx = ws.query_params.get("callRoomIdx")
+    logger.info(
+        "CC STT websocket accepted session=%s callRoomIdx=%s silence_timeout=%.2fs",
+        session_id,
+        call_room_idx,
+        SILENCE_TIMEOUT_SECONDS,
+    )
     state = STTSessionState()
     state_lock = asyncio.Lock()
     inference_task = asyncio.create_task(_run_inference_loop(ws, state, state_lock))
