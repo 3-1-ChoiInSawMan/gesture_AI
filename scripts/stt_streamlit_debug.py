@@ -29,10 +29,12 @@ class SendResult:
     trace: list[str]
 
 
-def _build_ws_url(base_url: str, session_id: str, debug: bool) -> str:
+def _build_ws_url(base_url: str, session_id: str, call_room_idx: str, debug: bool) -> str:
     url = base_url.strip()
     separator = "&" if "?" in url else "?"
     url = f"{url}{separator}session_id={session_id}"
+    if call_room_idx.strip():
+        url = f"{url}&callRoomIdx={call_room_idx.strip()}"
     if debug:
         url = f"{url}&debug=1"
     return url
@@ -443,6 +445,7 @@ with st.sidebar:
     st.header("Connection")
     base_url = st.text_input("WebSocket URL", value="ws://localhost:8000/cc_stt")
     session_id = st.text_input("session_id", value=f"st-debug-{uuid4()}")
+    call_room_idx = st.text_input("callRoomIdx", value="")
     debug_param = st.checkbox("Append debug=1", value=False)
 
     st.header("Streaming")
@@ -458,7 +461,7 @@ with st.sidebar:
     receive_total_timeout = st.number_input("Receive total timeout sec", min_value=1.0, max_value=300.0, value=30.0, step=1.0)
     ping_interval_enabled = st.checkbox("Enable websocket ping", value=True)
 
-live_url = _build_ws_url(base_url, session_id, debug_param)
+live_url = _build_ws_url(base_url, session_id, call_room_idx, debug_param)
 
 if test_mode == "Live microphone":
     st.caption("Browser microphone audio is sent directly from this page to the FastAPI WebSocket as binary frames.")
@@ -495,7 +498,7 @@ col_d.metric("Estimated chunks", estimated_chunks)
 send_clicked = st.button("Send audio", type="primary", use_container_width=True)
 
 if send_clicked:
-    url = _build_ws_url(base_url, session_id, debug_param)
+    url = _build_ws_url(base_url, session_id, call_room_idx, debug_param)
     ping_interval = 20.0 if ping_interval_enabled else None
 
     with st.spinner("Streaming audio to WebSocket..."):
