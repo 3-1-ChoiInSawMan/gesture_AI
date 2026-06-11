@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI
-from router import health, cc, summary, cc_stt, root
+from router import cc, summary, cc_stt, root
 from util.loadLogger import logger
 from util.service.cc_service import warmup_sentence_model
 
