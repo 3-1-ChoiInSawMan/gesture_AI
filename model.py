@@ -1,6 +1,5 @@
-import os
 import random
-from collections import defaultdict
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -16,7 +15,11 @@ plt.rcParams["axes.unicode_minus"] = False
 # =========================
 # 설정
 # =========================
-DATASET_DIR = "dataset"   # dataset/class_name/*.npy
+SPLIT_DATASET_DIR = Path("dataset_split")
+TRAIN_DIR = SPLIT_DATASET_DIR / "train"
+VAL_DIR = SPLIT_DATASET_DIR / "val"
+TEST_DIR = SPLIT_DATASET_DIR / "test"
+TRAIN_AUGMENTED_DIR = SPLIT_DATASET_DIR / "train_aug"
 SEQ_LEN = 30
 INPUT_DIM = 88
 BATCH_SIZE = 16
@@ -37,56 +40,87 @@ def set_seed(seed=42):
 
 
 # =========================
-# 데이터 분할
-# 클래스당 30개 기준: 24 / 3 / 3
+# 데이터 로딩
+# dataset_split/train, val, test는 원본 데이터만 포함한다.
+# dataset_split/train_augmented가 있으면 train에만 추가로 사용한다.
 # =========================
-def build_split(dataset_dir):
-    class_names = sorted(
-        d for d in os.listdir(dataset_dir)
-        if os.path.isdir(os.path.join(dataset_dir, d))
+def _npy_files(class_dir: Path) -> list[Path]:
+    return sorted(path for path in class_dir.glob("*.npy") if path.is_file())
+
+
+def _require_split_dir(path: Path):
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Split directory not found: {path}. "
+            "Run `python3 split_dataset.py --source dataset --target dataset_split` first."
+        )
+    if not path.is_dir():
+        raise NotADirectoryError(f"Split path is not a directory: {path}")
+
+
+def _collect_samples(root: Path, label2idx: dict[str, int], required: bool) -> list[tuple[str, int]]:
+    if not root.exists():
+        if required:
+            _require_split_dir(root)
+        return []
+
+    unknown_classes = sorted(
+        path.name for path in root.iterdir()
+        if path.is_dir() and path.name not in label2idx
     )
+    if unknown_classes:
+        raise ValueError(f"Unknown classes under {root}: {unknown_classes}")
+
+    samples = []
+    missing_classes = []
+    for class_name in sorted(label2idx):
+        class_dir = root / class_name
+        if not class_dir.exists():
+            if required:
+                missing_classes.append(class_name)
+            continue
+
+        files = _npy_files(class_dir)
+        if required and not files:
+            raise ValueError(f"No .npy files found in required split: {class_dir}")
+
+        samples.extend((str(path), label2idx[class_name]) for path in files)
+
+    if missing_classes:
+        raise ValueError(f"Missing classes under {root}: {missing_classes}")
+
+    return samples
+
+
+def build_split(
+    train_dir: Path = TRAIN_DIR,
+    val_dir: Path = VAL_DIR,
+    test_dir: Path = TEST_DIR,
+    train_augmented_dir: Path = TRAIN_AUGMENTED_DIR,
+):
+    for split_dir in (train_dir, val_dir, test_dir):
+        _require_split_dir(split_dir)
+
+    class_names = sorted(path.name for path in train_dir.iterdir() if path.is_dir())
+    if not class_names:
+        raise ValueError(f"No class directories found under {train_dir}")
 
     label2idx = {name: i for i, name in enumerate(class_names)}
     idx2label = {i: name for name, i in label2idx.items()}
 
-    train_samples = []
-    val_samples = []
-    test_samples = []
+    train_samples = _collect_samples(train_dir, label2idx, required=True)
+    augmented_train_samples = _collect_samples(
+        train_augmented_dir,
+        label2idx,
+        required=False,
+    )
+    val_samples = _collect_samples(val_dir, label2idx, required=True)
+    test_samples = _collect_samples(test_dir, label2idx, required=True)
 
-    for cls in class_names:
-        cls_dir = os.path.join(dataset_dir, cls)
-        files = sorted(
-            os.path.join(cls_dir, f)
-            for f in os.listdir(cls_dir)
-            if f.endswith(".npy")
-        )
+    train_samples.extend(augmented_train_samples)
 
-        random.shuffle(files)
-
-        n = len(files)
-        if n < 10:
-            raise ValueError(f"{cls} 클래스 샘플이 너무 적음: {n}")
-
-        # 대충 80 / 10 / 10
-        n_train = int(n * 0.8)
-        n_val = int(n * 0.1)
-        n_test = n - n_train - n_val
-
-        # 너무 작게 쪼개지는 거 방지
-        if n_val < 1:
-            n_val = 1
-            n_train -= 1
-        if n_test < 1:
-            n_test = 1
-            n_train -= 1
-
-        train_files = files[:n_train]
-        val_files = files[n_train:n_train + n_val]
-        test_files = files[n_train + n_val:]
-
-        train_samples += [(p, label2idx[cls]) for p in train_files]
-        val_samples += [(p, label2idx[cls]) for p in val_files]
-        test_samples += [(p, label2idx[cls]) for p in test_files]
+    if augmented_train_samples:
+        print(f"train_augmented: {len(augmented_train_samples)} samples from {train_augmented_dir}")
 
     return train_samples, val_samples, test_samples, label2idx, idx2label
 
@@ -219,15 +253,17 @@ def evaluate(model, loader, criterion):
 def main():
     set_seed(SEED)
 
-    train_samples, val_samples, test_samples, label2idx, idx2label = build_split(DATASET_DIR)
+    train_samples, val_samples, test_samples, label2idx, idx2label = build_split()
 
+    print("dataset_split:", SPLIT_DATASET_DIR)
     print("classes:", label2idx)
     print("train:", len(train_samples), "val:", len(val_samples), "test:", len(test_samples))
     print()
-    print(torch.cuda.is_available() if torch.cuda.is_available() else "cpu")
-    print(torch.cuda.get_device_name(0))
+    print("device:", DEVICE)
+    if torch.cuda.is_available():
+        print(torch.cuda.get_device_name(0))
 
-    train_ds = GestureDataset(train_samples, seq_len=SEQ_LEN, augment=True)
+    train_ds = GestureDataset(train_samples, seq_len=SEQ_LEN, augment=False)
     val_ds = GestureDataset(val_samples, seq_len=SEQ_LEN, augment=False)
     test_ds = GestureDataset(test_samples, seq_len=SEQ_LEN, augment=False)
 
