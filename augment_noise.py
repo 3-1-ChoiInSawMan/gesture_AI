@@ -5,9 +5,25 @@ from pathlib import Path
 import numpy as np
 
 
-DEFAULT_SOURCE = "dataset"
+DEFAULT_SOURCE = "dataset_30"
 DEFAULT_TARGET = "dataset_noisy"
 HAND_FEATURES = 84
+HAND_LANDMARKS = 21
+HAND_COORDS = 2
+FEATURES_PER_HAND = HAND_LANDMARKS * HAND_COORDS
+
+PALM_LANDMARKS = (0, 1, 5, 9, 13, 17)
+FINGER_GROUPS = (
+    (1, 2, 3, 4),        # thumb
+    (5, 6, 7, 8),        # index
+    (9, 10, 11, 12),     # middle
+    (13, 14, 15, 16),    # ring
+    (17, 18, 19, 20),    # pinky
+)
+FINGER_DEPTH_WEIGHTS = (0.35, 0.55, 0.75, 1.0)
+PALM_NOISE_SCALE = 0.35
+SHOULDER_NOISE_SCALE = 0.25
+TEMPORAL_SMOOTH_WINDOW = 5
 
 
 def parse_args():
@@ -34,7 +50,7 @@ def parse_args():
         "--noise-std",
         type=float,
         default=0.01,
-        help="Gaussian noise standard deviation. Default: 0.01",
+        help="Finger-part noise standard deviation. Default: 0.01",
     )
     parser.add_argument(
         "--seed",
@@ -78,16 +94,83 @@ def load_sequence(path: Path) -> np.ndarray:
     return seq.astype(np.float32)
 
 
-def add_gaussian_noise(
+def smooth_temporal_offsets(offsets: np.ndarray, window: int) -> np.ndarray:
+    if window <= 1 or offsets.shape[0] <= 1:
+        return offsets
+
+    window = min(window, offsets.shape[0])
+    kernel = np.ones(window, dtype=np.float32) / window
+    pad_left = window // 2
+    pad_right = window - 1 - pad_left
+    padded = np.pad(offsets, ((pad_left, pad_right), (0, 0)), mode="edge")
+
+    smoothed = np.empty_like(offsets, dtype=np.float32)
+    for coord_idx in range(offsets.shape[1]):
+        smoothed[:, coord_idx] = np.convolve(
+            padded[:, coord_idx],
+            kernel,
+            mode="valid",
+        )
+    return smoothed
+
+
+def random_part_offsets(
+    frames: int,
+    rng: np.random.Generator,
+    noise_std: float,
+) -> np.ndarray:
+    offsets = rng.normal(loc=0.0, scale=noise_std, size=(frames, HAND_COORDS))
+    return smooth_temporal_offsets(
+        offsets.astype(np.float32),
+        TEMPORAL_SMOOTH_WINDOW,
+    )
+
+
+def add_noise_to_hand(
+    hand: np.ndarray,
+    rng: np.random.Generator,
+    noise_std: float,
+) -> np.ndarray:
+    frames = hand.shape[0]
+    hand_points = hand.reshape(frames, HAND_LANDMARKS, HAND_COORDS)
+    deltas = np.zeros_like(hand_points, dtype=np.float32)
+
+    palm_offsets = random_part_offsets(frames, rng, noise_std) * PALM_NOISE_SCALE
+    deltas[:, PALM_LANDMARKS, :] += palm_offsets[:, None, :]
+
+    for finger in FINGER_GROUPS:
+        finger_offsets = random_part_offsets(frames, rng, noise_std)
+        for landmark_idx, weight in zip(finger, FINGER_DEPTH_WEIGHTS):
+            deltas[:, landmark_idx, :] += finger_offsets * weight
+
+    return (hand_points + deltas).reshape(frames, FEATURES_PER_HAND)
+
+
+def add_finger_part_noise(
     seq: np.ndarray,
     rng: np.random.Generator,
     noise_std: float,
     include_shoulders: bool,
 ) -> np.ndarray:
     noisy = seq.copy()
-    end = noisy.shape[1] if include_shoulders else HAND_FEATURES
-    noise = rng.normal(loc=0.0, scale=noise_std, size=noisy[:, :end].shape)
-    noisy[:, :end] += noise.astype(np.float32)
+    noisy[:, :FEATURES_PER_HAND] = add_noise_to_hand(
+        noisy[:, :FEATURES_PER_HAND],
+        rng,
+        noise_std,
+    )
+    noisy[:, FEATURES_PER_HAND:HAND_FEATURES] = add_noise_to_hand(
+        noisy[:, FEATURES_PER_HAND:HAND_FEATURES],
+        rng,
+        noise_std,
+    )
+
+    if include_shoulders:
+        noise = rng.normal(
+            loc=0.0,
+            scale=noise_std * SHOULDER_NOISE_SCALE,
+            size=noisy[:, HAND_FEATURES:].shape,
+        )
+        noisy[:, HAND_FEATURES:] += noise.astype(np.float32)
     return noisy.astype(np.float32)
 
 
@@ -158,7 +241,7 @@ def main():
             for copy_idx in range(1, args.copies + 1):
                 if noisy_written >= max_noisy:
                     break
-                noisy = add_gaussian_noise(
+                noisy = add_finger_part_noise(
                     seq=seq,
                     rng=rng,
                     noise_std=args.noise_std,
