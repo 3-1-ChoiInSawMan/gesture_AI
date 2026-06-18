@@ -64,18 +64,6 @@ else:
 model.to(device)
 model.eval()
 
-
-# Request/Response models
-class GenerateSentenceRequest(BaseModel):
-    text: str
-    callRoomIdx: int | None = None
-
-
-class GenerateSentenceResponse(BaseModel):
-    sentence: str
-    callRoomIdx: int | None = None
-
-
 def _parse_word_candidates(text: str) -> list[list[str]]:
     """
     텍스트 형식을 파싱하여 word_candidates 형식으로 변환
@@ -509,7 +497,7 @@ async def jamak(websocket: WebSocket):
         )
         logger.info("소켓끊김")
 
-
+from schema.subtitleSchema import GenerateSentenceRequest, GenerateSentenceResponse
 @router.post("/cc/sentence", response_model=GenerateSentenceResponse)
 async def generate_sentence(request: GenerateSentenceRequest) -> GenerateSentenceResponse:
     """
