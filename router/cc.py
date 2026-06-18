@@ -483,14 +483,17 @@ async def jamak(websocket: WebSocket):
                 if word_candidates and (
                     not words or words[-1][0] != word_candidates[0]
                 ):
-                    words.append(word_candidates)
-                    top_words = [candidates[0] for candidates in words if candidates]
+                    # 기존에는 top3 후보까지 전달했으나, 혼잡함을 줄이기 위해
+                    # 가장 높은 유사도 단어 하나만 저장하고 전송합니다.
+                    # words.append(word_candidates)
+                    words.append([word_candidates[0]])
+                    # top_words = [candidates[0] for candidates in words if candidates]
                     await websocket.send_json(
                         {
                             "type": "word",
                             "word": word_candidates[0],
-                            "words": top_words,
-                            "word_candidates": words,
+                            # "words": top_words,  # top3 후보 목록 대신 제거
+                            # "word_candidates": words,  # 후보 리스트 전체 전달 주석 처리
                             "callRoomIdx": call_room_idx,
                         }
                     )

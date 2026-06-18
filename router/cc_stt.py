@@ -41,6 +41,7 @@ class STTSessionState:
     committed_prefix_length: int = 0
     audio_version: int = 0
     utterance_epoch: int = 0
+    last_sent_text: str = ""
 
 
 def _extract_text(segments) -> str:
@@ -77,7 +78,12 @@ def _find_incremental_text(previous_text: str, current_text: str) -> str:
 
 def _transcribe_audio(audio_bytes: bytes) -> str:
     audio = io.BytesIO(audio_bytes)
-    segments, _ = model.transcribe(audio, beam_size=1, language=STT_LANGUAGE)
+    segments, _ = model.transcribe(
+        audio,
+        beam_size=1,
+        language=STT_LANGUAGE,
+        vad_filter=True,
+    )
     return _extract_text(segments)
 
 
@@ -92,6 +98,7 @@ def _reset_utterance_state(state: STTSessionState) -> None:
     state.previous_tokens = []
     state.committed_tokens = []
     state.committed_prefix_length = 0
+    state.last_sent_text = ""
     state.audio_version += 1
     state.utterance_epoch += 1
 
@@ -140,7 +147,9 @@ async def _run_inference_loop(
             incremental_text = _find_incremental_text(state.previous_text, current_text)
 
             if incremental_text:
-                text_to_emit = incremental_text
+                if incremental_text != state.last_sent_text:
+                    text_to_emit = incremental_text
+                    state.last_sent_text = incremental_text
                 state.previous_text = current_text
 
             state.previous_tokens = current_tokens
