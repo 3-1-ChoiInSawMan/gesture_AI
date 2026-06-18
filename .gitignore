@@ -7,3 +7,6 @@ logs/
 
 .agents/
 .codex/
+notebook/*.json
+notebook/*.jsonl
+notebook/postman
