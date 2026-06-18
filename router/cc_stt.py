@@ -41,7 +41,7 @@ class STTSessionState:
     committed_prefix_length: int = 0
     audio_version: int = 0
     utterance_epoch: int = 0
-    last_sent_text: str = ""
+    emitted_text: str = ""
 
 
 def _extract_text(segments) -> str:
@@ -76,6 +76,14 @@ def _find_incremental_text(previous_text: str, current_text: str) -> str:
     return current_text
 
 
+def _append_text(base_text: str, addition: str) -> str:
+    if not addition:
+        return base_text
+    if not base_text:
+        return addition.strip()
+    return f"{base_text.rstrip()} {addition.strip()}".strip()
+
+
 def _transcribe_audio(audio_bytes: bytes) -> str:
     audio = io.BytesIO(audio_bytes)
     segments, _ = model.transcribe(
@@ -98,9 +106,17 @@ def _reset_utterance_state(state: STTSessionState) -> None:
     state.previous_tokens = []
     state.committed_tokens = []
     state.committed_prefix_length = 0
-    state.last_sent_text = ""
+    state.emitted_text = ""
     state.audio_version += 1
     state.utterance_epoch += 1
+
+
+def _consume_finalized_text(state: STTSessionState) -> str:
+    finalized_text = " ".join(_finalize_tokens(state)).strip()
+    text_to_emit = _find_incremental_text(state.emitted_text, finalized_text)
+    if text_to_emit:
+        state.emitted_text = _append_text(state.emitted_text, text_to_emit)
+    return text_to_emit
 
 
 async def _run_inference_loop(
@@ -147,9 +163,8 @@ async def _run_inference_loop(
             incremental_text = _find_incremental_text(state.previous_text, current_text)
 
             if incremental_text:
-                if incremental_text != state.last_sent_text:
-                    text_to_emit = incremental_text
-                    state.last_sent_text = incremental_text
+                text_to_emit = incremental_text
+                state.emitted_text = _append_text(state.emitted_text, text_to_emit)
                 state.previous_text = current_text
 
             state.previous_tokens = current_tokens
@@ -186,8 +201,13 @@ async def stt_cc(ws: WebSocket):
                 )
             except asyncio.TimeoutError:
                 async with state_lock:
-                    finalized_tokens = _finalize_tokens(state)
+                    text_to_emit = _consume_finalized_text(state)
                     _reset_utterance_state(state)
+                if text_to_emit:
+                    try:
+                        await ws.send_text(text_to_emit)
+                    except (WebSocketDisconnect, RuntimeError):
+                        return
                 continue
 
             if not data:
@@ -198,8 +218,14 @@ async def stt_cc(ws: WebSocket):
                 state.audio_version += 1
     except WebSocketDisconnect:
         async with state_lock:
-            finalized_tokens = _finalize_tokens(state)
+            text_to_emit = _consume_finalized_text(state)
             _reset_utterance_state(state)
+        if text_to_emit:
+            logger.info(
+                "CC STT finalized text dropped after disconnect session=%s text=%r",
+                session_id,
+                text_to_emit,
+            )
 
     finally:
         inference_task.cancel()

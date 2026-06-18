@@ -37,7 +37,14 @@ logger.info("cc router 로딩됨")
 router = APIRouter()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model_path = Path(__file__).resolve().parent.parent / "weights" / "best_bigru.pt"
+model_dir = Path(__file__).resolve().parent.parent / "weights"
+model_path = model_dir / "best_bigru.pt"
+if not model_path.exists():
+    fallback_model_path = model_dir / "best_bigru30.pt"
+    if fallback_model_path.exists():
+        logger.warning("Using fallback CC model path: %s", fallback_model_path)
+        model_path = fallback_model_path
+
 checkpoint = torch.load(model_path, map_location=device)
 
 if isinstance(checkpoint, dict) and "idx2label" in checkpoint:
@@ -63,18 +70,6 @@ else:
 
 model.to(device)
 model.eval()
-
-
-# Request/Response models
-class GenerateSentenceRequest(BaseModel):
-    text: str
-    callRoomIdx: int | None = None
-
-
-class GenerateSentenceResponse(BaseModel):
-    sentence: str
-    callRoomIdx: int | None = None
-
 
 def _parse_word_candidates(text: str) -> list[list[str]]:
     """
@@ -295,16 +290,34 @@ async def _flush_words(
     sentence = await asyncio.to_thread(generate_sentence_from_words, finalized_words)
     await asyncio.to_thread(store_final_sentence, session_id, sentence, finalized_words)
 
+    if not sentence:
+        logger.warning("CC sentence generation returned empty session=%s", session_id)
+        return []
+
     if emit and sentence:
-        await websocket.send_json(
-            {
-                "type": "sentence",
-                "sentence": sentence,
-                "text": sentence,
-                "callRoomIdx": call_room_idx,
-            }
+        try:
+            await websocket.send_json(
+                {
+                    "type": "sentence",
+                    "sentence": sentence,
+                    "text": sentence,
+                    "callRoomIdx": call_room_idx,
+                }
+            )
+        except (WebSocketDisconnect, RuntimeError):
+            logger.warning(
+                "CC sentence generated but not delivered session=%s sentence=%r",
+                session_id,
+                sentence,
+            )
+            raise
+        logger.info("CC sentence sent session=%s sentence=%r", session_id, sentence)
+    else:
+        logger.info(
+            "CC sentence generated without websocket emit session=%s sentence=%r",
+            session_id,
+            sentence,
         )
-    logger.info("문장 반환됨")
     return []
 
 
@@ -499,7 +512,7 @@ async def jamak(websocket: WebSocket):
                     )
                     logger.info("words에 추가")
 
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError):
         await _flush_words(
             websocket,
             session_id,
@@ -509,7 +522,7 @@ async def jamak(websocket: WebSocket):
         )
         logger.info("소켓끊김")
 
-
+from schema.subtitleSchema import GenerateSentenceRequest, GenerateSentenceResponse
 @router.post("/cc/sentence", response_model=GenerateSentenceResponse)
 async def generate_sentence(request: GenerateSentenceRequest) -> GenerateSentenceResponse:
     """

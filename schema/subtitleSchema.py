@@ -18,3 +18,14 @@ class SummaryResponse(BaseModel):
     summary: str
     source_count: int
     session_id: Optional[str] = None
+
+
+
+class GenerateSentenceRequest(BaseModel):
+    text: str
+    callRoomIdx: int | None = None
+
+
+class GenerateSentenceResponse(BaseModel):
+    sentence: str
+    callRoomIdx: int | None = None
