@@ -1,7 +1,7 @@
 import os
 import random
 import argparse
-from collections import defaultdict
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -84,6 +84,87 @@ def build_split(dataset_dir):
         train_samples += [(p, label2idx[cls]) for p in train_files]
         val_samples += [(p, label2idx[cls]) for p in val_files]
         test_samples += [(p, label2idx[cls]) for p in test_files]
+
+    return train_samples, val_samples, test_samples, label2idx, idx2label
+
+
+def _npy_files(class_dir: Path) -> list[Path]:
+    return sorted(path for path in class_dir.glob("*.npy") if path.is_file())
+
+
+def _require_split_dir(path: Path):
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Split directory not found: {path}. "
+            "Prepare train, val and test class folders under --split-dir first."
+        )
+    if not path.is_dir():
+        raise NotADirectoryError(f"Split path is not a directory: {path}")
+
+
+def _collect_samples(root: Path, label2idx: dict[str, int], required: bool) -> list[tuple[str, int]]:
+    if not root.exists():
+        if required:
+            _require_split_dir(root)
+        return []
+
+    unknown_classes = sorted(
+        path.name for path in root.iterdir()
+        if path.is_dir() and path.name not in label2idx
+    )
+    if unknown_classes:
+        raise ValueError(f"Unknown classes under {root}: {unknown_classes}")
+
+    samples = []
+    missing_classes = []
+    for class_name in sorted(label2idx):
+        class_dir = root / class_name
+        if not class_dir.exists():
+            if required:
+                missing_classes.append(class_name)
+            continue
+
+        files = _npy_files(class_dir)
+        if required and not files:
+            raise ValueError(f"No .npy files found in required split: {class_dir}")
+
+        samples.extend((str(path), label2idx[class_name]) for path in files)
+
+    if missing_classes:
+        raise ValueError(f"Missing classes under {root}: {missing_classes}")
+
+    return samples
+
+
+def build_presplit(
+    train_dir: Path,
+    val_dir: Path,
+    test_dir: Path,
+    train_augmented_dir: Path,
+):
+    for split_dir in (train_dir, val_dir, test_dir):
+        _require_split_dir(split_dir)
+
+    class_names = sorted(path.name for path in train_dir.iterdir() if path.is_dir())
+    if not class_names:
+        raise ValueError(f"No class directories found under {train_dir}")
+
+    label2idx = {name: i for i, name in enumerate(class_names)}
+    idx2label = {i: name for name, i in label2idx.items()}
+
+    train_samples = _collect_samples(train_dir, label2idx, required=True)
+    augmented_train_samples = _collect_samples(
+        train_augmented_dir,
+        label2idx,
+        required=False,
+    )
+    val_samples = _collect_samples(val_dir, label2idx, required=True)
+    test_samples = _collect_samples(test_dir, label2idx, required=True)
+
+    train_samples.extend(augmented_train_samples)
+
+    if augmented_train_samples:
+        print(f"train_augmented: {len(augmented_train_samples)} samples from {train_augmented_dir}")
 
     return train_samples, val_samples, test_samples, label2idx, idx2label
 
@@ -255,16 +336,30 @@ def main():
         action="store_true",
         help="Skip training and redraw reports from the saved checkpoint.",
     )
+    parser.add_argument(
+        "--split-dir",
+        type=Path,
+        help="Use prepared train/val/test folders (and optional train_aug) instead of dataset_only5.",
+    )
     args = parser.parse_args()
 
     set_seed(SEED)
 
-    train_samples, val_samples, test_samples, label2idx, idx2label = build_split(DATASET_DIR)
+    if args.split_dir is None:
+        splits = build_split(DATASET_DIR)
+    else:
+        splits = build_presplit(
+            args.split_dir / "train",
+            args.split_dir / "val",
+            args.split_dir / "test",
+            args.split_dir / "train_aug",
+        )
+    train_samples, val_samples, test_samples, label2idx, idx2label = splits
 
     print("classes:", label2idx)
     print("train:", len(train_samples), "val:", len(val_samples), "test:", len(test_samples))
 
-    train_ds = GestureDataset(train_samples, seq_len=SEQ_LEN, augment=True)
+    train_ds = GestureDataset(train_samples, seq_len=SEQ_LEN, augment=args.split_dir is None)
     val_ds = GestureDataset(val_samples, seq_len=SEQ_LEN, augment=False)
     test_ds = GestureDataset(test_samples, seq_len=SEQ_LEN, augment=False)
 

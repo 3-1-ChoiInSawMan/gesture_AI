@@ -163,7 +163,7 @@ def draw_text(img, text, y=30, color=(0, 255, 0)):
 def collect_data(
     label: str,
     save_dir: str = "dataset",
-    frames_per_sample: int = 60,
+    frames_per_sample: int = 30,
     max_attempt_frames: int = 300,
 ):
     label_dir = os.path.join(save_dir, label)
@@ -329,6 +329,6 @@ if __name__ == "__main__":
     collect_data(
         label=label,
         save_dir="dataset",
-        frames_per_sample=60,
+        frames_per_sample=30,
         max_attempt_frames=300,
     )
