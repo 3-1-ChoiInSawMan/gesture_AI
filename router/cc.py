@@ -10,7 +10,7 @@ import torch.nn as nn
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
-from util.bigruClassifier import BiGRUClassifier
+from util.bigruClassifier import BiGRUClassifier, GRUClassifier
 from util.config import (
     CC_CONF_THRESHOLD,
     CC_HANDS_DOWN_MARGIN,
@@ -57,7 +57,7 @@ else:
 if isinstance(checkpoint, nn.Module):
     model = checkpoint
 elif isinstance(checkpoint, dict):
-    model = BiGRUClassifier(
+    model = GRUClassifier(  # GRU 테스트용, 나중에 BiGRU로 바꾸면 됨
         checkpoint.get("input_dim", INPUT_SIZE),
         HIDDEN_SIZE,
         NUM_LAYERS,
