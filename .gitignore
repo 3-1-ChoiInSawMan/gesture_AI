@@ -10,3 +10,6 @@ logs/
 notebook/*.json
 notebook/*.jsonl
 notebook/postman
+
+weights/
+weights/*

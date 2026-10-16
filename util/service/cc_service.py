@@ -5,6 +5,7 @@ import urllib.error
 import urllib.request
 
 from util.loadLogger import logger
+from util.gesture_prediction import is_none_label
 
 OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434"
 OLLAMA_CHAT_PATH = "/api/chat"
@@ -19,7 +20,19 @@ class OllamaRequestError(Exception):
     pass
 
 
+def _filter_word_candidates(word_candidates: list[list[str]]) -> list[list[str]]:
+    filtered = []
+    for candidates in word_candidates:
+        words = [word.strip() for word in candidates if word.strip()]
+        # A none top1 represents no gesture. Do not promote a backup gesture.
+        if not words or is_none_label(words[0]):
+            continue
+        filtered.append([word for word in words if not is_none_label(word)])
+    return filtered
+
+
 def _fallback_from_candidates(word_candidates: list[list[str]]) -> str:
+    word_candidates = _filter_word_candidates(word_candidates)
     return " ".join(candidates[0] for candidates in word_candidates if candidates).strip()
 
 
@@ -32,6 +45,7 @@ def build_sentence_prompt(word_candidates: list[list[str]]) -> str:
     이렇게 하면 모델이 top1을 우선으로 사용하고, 
     필요한 경우에만 백업을 참고하여 문맥상 맞는 선택을 할 수 있음
     """
+    word_candidates = _filter_word_candidates(word_candidates)
     # 주요 단어: 각 그룹의 첫 번째(top1)
     main_words = [
         candidates[0] 
@@ -198,6 +212,7 @@ def _ollama_chat(
 
 
 def generate_sentence_from_words(word_candidates: list[list[str]]) -> str:
+    word_candidates = _filter_word_candidates(word_candidates)
     fallback_sentence = _fallback_from_candidates(word_candidates)
     model_name = os.getenv("OLLAMA_MODEL")
 
