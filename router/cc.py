@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections import Counter, deque
+from collections import deque
 from pathlib import Path
 from uuid import uuid4
 
@@ -12,12 +12,12 @@ from pydantic import BaseModel
 
 from util.bigruClassifier import BiGRUClassifier, GRUClassifier
 from util.config import (
-    CC_CONF_THRESHOLD,
     CC_HANDS_DOWN_MARGIN,
     CC_HANDS_DOWN_MIN_FRAMES,
     CC_HANDS_DOWN_RATIO,
     CC_MIN_VALID_FRAMES,
     CC_NO_GESTURE_MIN_FRAMES,
+    CC_NONE_MIN_PREDICTIONS,
     CC_PRED_EVERY_N_FRAMES,
     CC_SILENCE_TIMEOUT_SECONDS,
     CC_SMOOTHING_WINDOW,
@@ -31,6 +31,7 @@ from util.config import (
 )
 from util.service.cc_service import generate_sentence_from_words, store_final_sentence
 from util.loadLogger import logger
+from util.gesture_prediction import is_none_label, select_word_candidates
 
 logger.info("cc router 로딩됨")
 
@@ -40,10 +41,12 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model_dir = Path(__file__).resolve().parent.parent / "weights"
 model_path = model_dir / "best_bigru.pt"
 if not model_path.exists():
-    fallback_model_path = model_dir / "best_bigru30.pt"
-    if fallback_model_path.exists():
-        logger.warning("Using fallback CC model path: %s", fallback_model_path)
-        model_path = fallback_model_path
+    for filename in ("best_gru.pt", "best_bigru30.pt"):
+        fallback_model_path = model_dir / filename
+        if fallback_model_path.exists():
+            logger.warning("Using fallback CC model path: %s", fallback_model_path)
+            model_path = fallback_model_path
+            break
 
 checkpoint = torch.load(model_path, map_location=device)
 
@@ -53,6 +56,12 @@ if isinstance(checkpoint, dict) and "idx2label" in checkpoint:
         idx2label = {int(key): value for key, value in idx2label.items()}
 else:
     idx2label = {v: k for k, v in LABEL2IDX.items()}
+
+if not any(is_none_label(label) for label in idx2label.values()):
+    logger.warning(
+        "CC model has no none class. Visible idle hands require a model "
+        "retrained with none samples; confidence filtering alone is insufficient."
+    )
 
 if isinstance(checkpoint, nn.Module):
     model = checkpoint
@@ -82,7 +91,8 @@ def _parse_word_candidates(text: str) -> list[list[str]]:
     
     candidates = []
     for word_group in text.strip().split():
-        if word_group:
+        # Check before splitting: no_gesture is a single none alias.
+        if word_group and not is_none_label(word_group):
             word_list = word_group.split("_")
             candidates.append(word_list)
     
@@ -146,12 +156,6 @@ def _are_hands_lowered(frame_vec: np.ndarray | None) -> bool:
         left_lowered_ratio >= CC_HANDS_DOWN_RATIO
         and right_lowered_ratio >= CC_HANDS_DOWN_RATIO
     )
-
-
-def _majority_vote(items: deque[int]) -> int | None:
-    if not items:
-        return None
-    return Counter(items).most_common(1)[0][0]
 
 
 def _predict_sequence(sequence: list[np.ndarray]) -> list[tuple[int, float]]:
@@ -219,6 +223,12 @@ def _consume_frame(
     else:
         seq_buffer.append(last_valid_framevec.copy())
         valid_flag_buffer.append(False)
+        pred_history.clear()
+        return None, last_valid_framevec, {
+            "frame_count": frame_count,
+            "valid": False,
+            "reason": "invalid_frame",
+        }
 
     valid_frames = sum(valid_flag_buffer)
     can_predict = len(seq_buffer) == WINDOW_SIZE and valid_frames >= CC_MIN_VALID_FRAMES
@@ -239,38 +249,8 @@ def _consume_frame(
         return None, last_valid_framevec, debug
 
     predictions = _predict_sequence(list(seq_buffer))
-    if not predictions:
-        return None, last_valid_framevec, None
-
-    prediction, confidence = predictions[0]
-    accepted = confidence >= CC_CONF_THRESHOLD
-    pred_history.append(prediction if accepted else -1)
-
-    candidate = idx2label.get(prediction)
-    candidate_words = [
-        word
-        for word in (idx2label.get(prediction) for prediction, _ in predictions)
-        if word
-    ]
-
-    voted = _majority_vote(pred_history)
-    voted_word = idx2label.get(voted) if voted is not None and voted != -1 else None
-    debug = {
-        "frame_count": frame_count,
-        "valid_frames": valid_frames,
-        "candidate": candidate,
-        "candidates": candidate_words,
-        "confidence": round(confidence, 4),
-        "accepted": accepted,
-        "voted": voted_word,
-    }
-
-    if not voted_word:
-        return None, last_valid_framevec, debug
-
-    word_candidates = [voted_word] + [
-        word for word in candidate_words if word != voted_word
-    ]
+    word_candidates, debug = select_word_candidates(predictions, idx2label, pred_history)
+    debug.update(frame_count=frame_count, valid_frames=valid_frames)
     return word_candidates, last_valid_framevec, debug
 
 
@@ -335,6 +315,7 @@ async def jamak(websocket: WebSocket):
     frame_count = 0
     hands_down_count = 0
     no_gesture_count = 0
+    none_prediction_count = 0
     call_room_idx = websocket.query_params.get("callRoomIdx")
     logger.info(
         "CC websocket accepted session=%s silence_timeout=%.2fs",
@@ -491,6 +472,23 @@ async def jamak(websocket: WebSocket):
                 )
                 if debug:
                     await _send_debug(websocket, debug_enabled, "prediction", **debug)
+                    if debug.get("reason") == "none_label":
+                        none_prediction_count += 1
+                    elif debug.get("reason") != "prediction_interval_skipped":
+                        none_prediction_count = 0
+                if none_prediction_count >= CC_NONE_MIN_PREDICTIONS and words:
+                    # Finish previously recognized words, never translate none.
+                    words = await _flush_words(
+                        websocket,
+                        session_id,
+                        words,
+                        emit=True,
+                        call_room_idx=call_room_idx,
+                    )
+                    seq_buffer.clear()
+                    valid_flag_buffer.clear()
+                    pred_history.clear()
+                    none_prediction_count = 0
                 if debug_enabled:
                     logger.debug("CC frame processed session=%s frame=%s", session_id, frame_count)
                 if word_candidates and (

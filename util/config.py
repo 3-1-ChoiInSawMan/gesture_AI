@@ -5,6 +5,9 @@ NUM_LAYERS = 2
 NUM_CLASSES = 5
 
 CC_CONF_THRESHOLD = 0.70
+# These labels represent visible hands without an intentional gesture.
+CC_NONE_LABELS = frozenset({"none", "idle", "no_gesture"})
+CC_NONE_MIN_PREDICTIONS = 6
 CC_TOP_K = 3
 CC_PRED_EVERY_N_FRAMES = 1
 CC_SMOOTHING_WINDOW = 7
