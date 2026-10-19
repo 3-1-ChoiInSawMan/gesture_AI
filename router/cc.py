@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from collections import deque
 from pathlib import Path
 from uuid import uuid4
@@ -32,6 +33,7 @@ from util.config import (
 from util.service.cc_service import generate_sentence_from_words, store_final_sentence
 from util.loadLogger import logger
 from util.gesture_prediction import is_none_label, select_word_candidates
+from util.gesture_preprocessing import prepare_sequence
 
 logger.info("cc router 로딩됨")
 
@@ -39,9 +41,10 @@ router = APIRouter()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 model_dir = Path(__file__).resolve().parent.parent / "weights"
-model_path = model_dir / "best_bigru.pt"
-if not model_path.exists():
-    for filename in ("best_gru.pt", "best_bigru30.pt"):
+configured_model_path = os.getenv("CC_MODEL_PATH")
+model_path = Path(configured_model_path) if configured_model_path else model_dir / "best_gru.pt"
+if not configured_model_path and not model_path.exists():
+    for filename in ("best_bigru.pt", "best_bigru30.pt"):
         fallback_model_path = model_dir / filename
         if fallback_model_path.exists():
             logger.warning("Using fallback CC model path: %s", fallback_model_path)
@@ -49,6 +52,11 @@ if not model_path.exists():
             break
 
 checkpoint = torch.load(model_path, map_location=device)
+sequence_normalization = (
+    checkpoint.get("sequence_normalization", True)
+    if isinstance(checkpoint, dict) else True
+)
+logger.info("CC model=%s sequence_normalization=%s", model_path, sequence_normalization)
 
 if isinstance(checkpoint, dict) and "idx2label" in checkpoint:
     idx2label = checkpoint["idx2label"]
@@ -160,7 +168,7 @@ def _are_hands_lowered(frame_vec: np.ndarray | None) -> bool:
 
 def _predict_sequence(sequence: list[np.ndarray]) -> list[tuple[int, float]]:
     x = np.asarray(sequence, dtype=np.float32)
-    x = _normalize_sequence(x)
+    x = prepare_sequence(x, sequence_normalization=sequence_normalization)
     x = torch.from_numpy(x).unsqueeze(0).to(device)
 
     with torch.no_grad():
