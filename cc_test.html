@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>/cc 테스트</title>
+  <style>
+    body { max-width: 960px; margin: 28px auto; padding: 0 16px; font-family: system-ui, sans-serif; background: #f4f6f8; color: #17212b; }
+    section { background: white; padding: 18px; margin: 16px 0; border: 1px solid #dce1e6; border-radius: 10px; }
+    .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+    input, button, textarea { font: inherit; padding: 8px; }
+    #url { flex: 1; min-width: 260px; }
+    #room { width: 80px; }
+    button { cursor: pointer; }
+    video { width: 100%; max-height: 420px; background: #17212b; transform: scaleX(-1); border-radius: 8px; }
+    textarea { width: 100%; min-height: 100px; box-sizing: border-box; font-family: monospace; }
+    pre { max-height: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+    #sentence { font-size: 24px; min-height: 36px; }
+    .hint { color: #596674; font-size: 14px; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic@0.5.1675471629/holistic.js"></script>
+</head>
+<body>
+  <h1>/cc WebSocket 테스트</h1>
+  <section>
+    <div class="controls">
+      <input id="url" aria-label="서버 주소" value="https://gesture.ingyuc.click">
+      <label>방 번호 <input id="room" type="number" value="46"></label>
+      <label><input id="ignoreHands" type="checkbox"> 손 내림 감지 무시</label>
+      <button id="connect">연결</button>
+      <button id="disconnect" disabled>연결 해제</button>
+    </div>
+    <p id="status" role="status">연결 안 됨</p>
+    <p class="hint">HTTPS 주소를 wss://…/cc?debug=1로 연결합니다. 방 번호와 손 내림 옵션은 연결 시 적용됩니다.</p>
+  </section>
+  <section>
+    <video id="video" autoplay muted playsinline></video>
+    <div class="controls">
+      <button id="camera">웹캠 시작</button>
+      <button id="stopCamera" disabled>웹캠 종료</button>
+      <label><input id="stream" type="checkbox"> 좌표 전송 (최대 15fps)</label>
+      <span id="count">전송 0 프레임</span>
+    </div>
+    <p id="tracking" class="hint">카메라 대기 중</p>
+    <p class="hint">연결 → 웹캠 시작 → 좌표 전송 체크. 양어깨와 손이 보이도록 촬영하세요. 전송 체크를 끄면 서버의 무입력 타임아웃 후 누적 단어가 문장으로 반환됩니다. 첫 실행은 MediaPipe 모델 다운로드가 필요합니다.</p>
+  </section>
+  <section>
+    <h2>인식 결과</h2>
+    <p>단어: <span id="words">-</span></p>
+    <div id="sentence" aria-live="polite">문장 대기 중</div>
+  </section>
+  <section>
+    <h2>JSON 수동 전송</h2>
+    <p class="hint">{"keypoints": [88개 숫자]} 또는 {"keypoints": [[88개 숫자], …]} 형식을 붙여 넣으세요. 웹캠 없이도 연결 및 입력 검증을 테스트할 수 있습니다.</p>
+    <textarea id="payload" aria-label="전송할 JSON">{"keypoints": []}</textarea>
+    <button id="send">전송</button>
+    <button id="clear">로그 지우기</button>
+    <pre id="log" aria-live="off"></pre>
+  </section>
+  <script>
+    const element = (id) => document.getElementById(id);
+    const holisticVersion = '0.5.1675471629';
+    let socket = null;
+    let mediaStream = null;
+    let holistic = null;
+    let animationId = null;
+    let lastFrameTime = 0;
+    let sentFrames = 0;
+    let cameraStarting = false;
+    const logLines = [];
+
+    function log(message) {
+      logLines.push(`${new Date().toLocaleTimeString()} ${message}`);
+      if (logLines.length > 150) logLines.shift();
+      element('log').textContent = logLines.join('\n');
+      element('log').scrollTop = element('log').scrollHeight;
+    }
+
+    function send(payload) {
+      if (socket?.readyState !== WebSocket.OPEN) throw new Error('먼저 서버에 연결하세요.');
+      if (socket.bufferedAmount > 256 * 1024) return false;
+      socket.send(JSON.stringify(payload));
+      return true;
+    }
+
+    element('connect').onclick = () => {
+      try {
+        const address = new URL(element('url').value.trim());
+        if (!['https:', 'http:', 'wss:', 'ws:'].includes(address.protocol)) throw new Error('HTTP 또는 WebSocket 주소를 입력하세요.');
+        address.protocol = ['https:', 'wss:'].includes(address.protocol) ? 'wss:' : 'ws:';
+        address.pathname = '/cc';
+        address.search = '';
+        address.hash = '';
+        address.searchParams.set('debug', '1');
+        address.searchParams.set('callRoomIdx', element('room').value);
+        if (element('ignoreHands').checked) address.searchParams.set('ignore_hands_down', '1');
+        socket = new WebSocket(address);
+        element('connect').disabled = true;
+        element('disconnect').disabled = false;
+        element('status').textContent = '연결 중…';
+        log(`연결 요청: ${address}`);
+        socket.onopen = () => { element('status').textContent = '연결됨'; log('WebSocket 연결됨'); };
+        socket.onmessage = ({ data }) => {
+          log(`수신: ${data}`);
+          try {
+            const message = JSON.parse(data);
+            if (message.type === 'word') element('words').textContent = message.word;
+            if (message.type === 'sentence') element('sentence').textContent = message.sentence || message.text || '';
+          } catch { log('JSON 이외의 응답을 받았습니다.'); }
+        };
+        socket.onerror = () => log('연결 오류: 터널과 서버 상태를 확인하세요. 상세 내용은 브라우저 개발자 도구에서 확인할 수 있습니다.');
+        socket.onclose = (event) => {
+          element('status').textContent = `연결 종료 (${event.code})`;
+          element('connect').disabled = false;
+          element('disconnect').disabled = true;
+          element('stream').checked = false;
+          log(`연결 종료: ${event.code} ${event.reason}`);
+        };
+      } catch (error) { log(error.message); }
+    };
+
+    element('disconnect').onclick = () => socket?.close(1000, '테스트 종료');
+    element('send').onclick = () => {
+      try {
+        const payload = JSON.parse(element('payload').value);
+        if (send(payload)) log(`전송: ${JSON.stringify(payload)}`);
+        else log('전송 대기량이 많습니다. 잠시 후 다시 시도하세요.');
+      } catch (error) { log(error.message); }
+    };
+    element('clear').onclick = () => { logLines.length = 0; element('log').textContent = ''; };
+
+    function stopCamera() {
+      cancelAnimationFrame(animationId);
+      mediaStream?.getTracks().forEach((track) => track.stop());
+      mediaStream = null;
+      element('video').srcObject = null;
+      element('stream').checked = false;
+      element('camera').disabled = false;
+      element('stopCamera').disabled = true;
+      element('tracking').textContent = '카메라 종료됨';
+    }
+
+    async function processFrame(timestamp) {
+      if (!mediaStream) return;
+      try {
+        if (timestamp - lastFrameTime >= 1000 / 15 && element('video').readyState >= 2) {
+          lastFrameTime = timestamp;
+          await holistic.send({ image: element('video') });
+        }
+      } catch (error) {
+        log(`좌표 추출 오류: ${error.message}`);
+        stopCamera();
+        return;
+      }
+      if (mediaStream) animationId = requestAnimationFrame(processFrame);
+    }
+
+    element('camera').onclick = async () => {
+      if (cameraStarting || mediaStream) return;
+      cameraStarting = true;
+      element('camera').disabled = true;
+      element('tracking').textContent = '카메라와 모델 준비 중…';
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) throw new Error('카메라를 사용할 수 없습니다. localhost 또는 HTTPS에서 열어주세요.');
+        if (!window.Holistic) throw new Error('MediaPipe 로드 실패: 인터넷 연결을 확인하세요.');
+        if (!holistic) {
+          holistic = new Holistic({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic@${holisticVersion}/${file}` });
+          holistic.setOptions({ modelComplexity: 1, smoothLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+          holistic.onResults((results) => {
+            const keypoints = [];
+            for (const hand of [results.leftHandLandmarks, results.rightHandLandmarks]) {
+              for (let index = 0; index < 21; index++) keypoints.push(hand?.[index]?.x ?? 0, hand?.[index]?.y ?? 0);
+            }
+            for (const index of [11, 12]) keypoints.push(results.poseLandmarks?.[index]?.x ?? 0, results.poseLandmarks?.[index]?.y ?? 0);
+            element('tracking').textContent = `왼손 ${results.leftHandLandmarks ? '감지' : '없음'} / 오른손 ${results.rightHandLandmarks ? '감지' : '없음'} / 어깨 ${results.poseLandmarks ? '감지' : '없음'}`;
+            if (element('stream').checked && socket?.readyState === WebSocket.OPEN) {
+              if (send({ keypoints })) element('count').textContent = `전송 ${++sentFrames} 프레임`;
+            }
+          });
+        }
+        mediaStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
+        element('video').srcObject = mediaStream;
+        await element('video').play();
+        lastFrameTime = 0;
+        element('stopCamera').disabled = false;
+        animationId = requestAnimationFrame(processFrame);
+      } catch (error) {
+        stopCamera();
+        log(`카메라 시작 실패: ${error.message}`);
+      } finally { cameraStarting = false; }
+    };
+    element('stopCamera').onclick = stopCamera;
+    window.addEventListener('beforeunload', () => { stopCamera(); socket?.close(); });
+  </script>
+</body>
+</html>

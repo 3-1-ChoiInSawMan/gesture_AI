@@ -347,7 +347,13 @@ async def jamak(websocket: WebSocket):
                     emit=True,
                     call_room_idx=call_room_idx,
                 )
-                
+                seq_buffer.clear()
+                valid_flag_buffer.clear()
+                pred_history.clear()
+                last_valid_framevec = np.zeros((INPUT_SIZE,), dtype=np.float32)
+                hands_down_count = 0
+                no_gesture_count = 0
+                none_prediction_count = 0
                 continue
 
             if not isinstance(data, dict):
@@ -454,10 +460,14 @@ async def jamak(websocket: WebSocket):
                             emit=True,
                             call_room_idx=call_room_idx,
                         )
-                        seq_buffer.clear()
-                        valid_flag_buffer.clear()
-                        pred_history.clear()
-                        continue
+                    # Lowered hands are a boundary, never recognition input.
+                    # Clear even when there are no words to flush.
+                    seq_buffer.clear()
+                    valid_flag_buffer.clear()
+                    pred_history.clear()
+                    none_prediction_count = 0
+                    last_valid_framevec = np.zeros((INPUT_SIZE,), dtype=np.float32)
+                    continue
 
                 if not hands_lowered:
                     hands_down_count = 0
