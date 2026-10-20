@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, Mock
 
 class GestureSegmentTests(unittest.IsolatedAsyncioTestCase):
     def make_flush(self):
-        tree = ast.parse((Path(__file__).resolve().parents[1]/'router/cc.py').read_text())
+        tree = ast.parse((Path(__file__).resolve().parents[1]/'router/cc.py').read_text(encoding='utf-8'))
         fn = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == '_flush_words')
         generate = Mock(return_value='sentence')
         ns = dict(WebSocket=object, Counter=Counter, asyncio=asyncio, logger=Mock(),
@@ -27,7 +27,9 @@ class GestureSegmentTests(unittest.IsolatedAsyncioTestCase):
         generate.assert_not_called()
         messages = [c.args[0] for c in ws.send_json.call_args_list]
         self.assertEqual([m['word'] for m in messages if m['type']=='word'],['저'])
-        self.assertEqual([m['sentence'] for m in messages if m['type']=='sentence'],['저'])
+        self.assertEqual(messages, [{
+            'type': 'word', 'word': '저', 'text': '저', 'callRoomIdx': None,
+        }])
 
     async def test_ambiguous_or_brief_gestures_are_discarded(self):
         for predictions in ([],['저'],['저','저'],['저','의견']*3):

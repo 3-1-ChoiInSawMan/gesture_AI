@@ -305,8 +305,8 @@ async def _flush_words(
         try:
             await websocket.send_json(
                 {
-                    "type": "sentence",
-                    "sentence": sentence,
+                    "type": "word",
+                    "word": word,
                     "text": sentence,
                     "callRoomIdx": call_room_idx,
                 }
