@@ -292,8 +292,6 @@ async def _flush_words(
         logger.info("Discarding ambiguous gesture session=%s votes=%s", session_id, dict(votes))
         return []
     finalized_words = [[word]]
-    if emit:
-        await websocket.send_json({"type": "word", "word": word, "callRoomIdx": call_room_idx})
     logger.info("Flushing %s CC words for session=%s", len(finalized_words), session_id)
     # Sentence rewriting is disabled: display the recognized word verbatim.
     sentence = word

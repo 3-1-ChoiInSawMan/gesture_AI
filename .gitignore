@@ -13,3 +13,5 @@ notebook/postman
 
 weights/
 weights/*
+
+hallucination_phrases.txt
