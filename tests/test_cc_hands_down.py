@@ -26,6 +26,7 @@ class HandsDownTests(unittest.IsolatedAsyncioTestCase):
         )
         namespace = dict(
             WebSocket=object, WebSocketDisconnect=Disconnected, asyncio=asyncio,
+            log_received_coordinates=Mock(),
             deque=deque, uuid4=lambda: "session", logger=Mock(),
             np=SimpleNamespace(zeros=lambda *args, **kwargs: frame, float32=float,
                                ndarray=object, asarray=lambda *args, **kwargs: payload),
@@ -65,7 +66,8 @@ class HandsDownTests(unittest.IsolatedAsyncioTestCase):
         )
         await handler(ws)
         self.assertEqual(snapshots, [([], [], []), ([], [], [])])
-        self.assertEqual(ws.send_json.await_count, 2)
+        # Predictions remain provisional until the boundary finalizes a word.
+        ws.send_json.assert_not_awaited()
         self.assertEqual(namespace["_flush_words"].call_args_list[0].args[2], [["hello"]])
 
 
