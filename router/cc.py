@@ -1,7 +1,7 @@
 import asyncio
 import json
 import os
-from collections import deque
+from collections import Counter, deque
 from pathlib import Path
 from uuid import uuid4
 
@@ -34,6 +34,7 @@ from util.service.cc_service import generate_sentence_from_words, store_final_se
 from util.loadLogger import logger
 from util.gesture_prediction import is_none_label, select_word_candidates
 from util.gesture_preprocessing import prepare_sequence
+from util.coordinate_logging import log_received_coordinates
 
 logger.info("cc router 로딩됨")
 
@@ -281,7 +282,18 @@ async def _flush_words(
     if not words:
         return []
 
-    finalized_words = list(words)
+    # Each entry is one accepted prediction within a single hands-up segment.
+    votes = Counter(candidate[0] for candidate in words if candidate)
+    if not votes:
+        return []
+    word, support = votes.most_common(1)[0]
+    total = sum(votes.values())
+    if support < 3 or support / total < 0.60:
+        logger.info("Discarding ambiguous gesture session=%s votes=%s", session_id, dict(votes))
+        return []
+    finalized_words = [[word]]
+    if emit:
+        await websocket.send_json({"type": "word", "word": word, "callRoomIdx": call_room_idx})
     logger.info("Flushing %s CC words for session=%s", len(finalized_words), session_id)
     sentence = await asyncio.to_thread(generate_sentence_from_words, finalized_words)
     await asyncio.to_thread(store_final_sentence, session_id, sentence, finalized_words)
@@ -329,6 +341,7 @@ async def jamak(websocket: WebSocket):
     pred_history: deque[int] = deque(maxlen=CC_SMOOTHING_WINDOW)
     last_valid_framevec = np.zeros((INPUT_SIZE,), dtype=np.float32)
     frame_count = 0
+    received_frame_count = 0
     hands_down_count = 0
     no_gesture_count = 0
     none_prediction_count = 0
@@ -397,6 +410,7 @@ async def jamak(websocket: WebSocket):
             try:
                 payload = np.asarray(keypoints, dtype=np.float32)
             except (TypeError, ValueError):
+                logger.warning("CC coordinates rejected session=%s reason=non_numeric", session_id)
                 await _send_debug(
                     websocket,
                     debug_enabled,
@@ -411,6 +425,7 @@ async def jamak(websocket: WebSocket):
             elif payload.ndim == 2 and payload.shape[1] == INPUT_SIZE:
                 frames = list(payload)
             else:
+                logger.warning("CC coordinates rejected session=%s shape=%s expected=(88,) or (N,88)", session_id, payload.shape)
                 await _send_debug(
                     websocket,
                     debug_enabled,
@@ -423,6 +438,10 @@ async def jamak(websocket: WebSocket):
 
             for frame_vec in frames:
                 valid_frame = _is_valid_frame(frame_vec)
+                received_frame_count += 1
+                if received_frame_count == 1 or received_frame_count % 30 == 0:
+                    log_received_coordinates(logger, session_id, call_room_idx,
+                                             received_frame_count, frame_vec, valid_frame)
                 if valid_frame:
                     no_gesture_count = 0
                 else:
@@ -502,39 +521,12 @@ async def jamak(websocket: WebSocket):
                         none_prediction_count += 1
                     elif debug.get("reason") != "prediction_interval_skipped":
                         none_prediction_count = 0
-                if none_prediction_count >= CC_NONE_MIN_PREDICTIONS and words:
-                    # Finish previously recognized words, never translate none.
-                    words = await _flush_words(
-                        websocket,
-                        session_id,
-                        words,
-                        emit=True,
-                        call_room_idx=call_room_idx,
-                    )
-                    seq_buffer.clear()
-                    valid_flag_buffer.clear()
-                    pred_history.clear()
-                    none_prediction_count = 0
+                # None predictions do not split a hands-up gesture. Only a
+                # confirmed hands-down/tracking-loss boundary or timeout ends it.
                 if debug_enabled:
                     logger.debug("CC frame processed session=%s frame=%s", session_id, frame_count)
-                if word_candidates and (
-                    not words or words[-1][0] != word_candidates[0]
-                ):
-                    # 기존에는 top3 후보까지 전달했으나, 혼잡함을 줄이기 위해
-                    # 가장 높은 유사도 단어 하나만 저장하고 전송합니다.
-                    # words.append(word_candidates)
+                if word_candidates:
                     words.append([word_candidates[0]])
-                    # top_words = [candidates[0] for candidates in words if candidates]
-                    await websocket.send_json(
-                        {
-                            "type": "word",
-                            "word": word_candidates[0],
-                            # "words": top_words,  # top3 후보 목록 대신 제거
-                            # "word_candidates": words,  # 후보 리스트 전체 전달 주석 처리
-                            "callRoomIdx": call_room_idx,
-                        }
-                    )
-                    logger.info("words에 추가")
 
     except (WebSocketDisconnect, RuntimeError):
         await _flush_words(
