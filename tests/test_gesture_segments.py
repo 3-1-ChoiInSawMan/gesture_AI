@@ -24,9 +24,10 @@ class GestureSegmentTests(unittest.IsolatedAsyncioTestCase):
         ws = SimpleNamespace(send_json=AsyncMock())
         result = await flush(ws,'session',[[w] for w in ['저','저','의견','저','저']],emit=True)
         self.assertEqual(result,[])
-        generate.assert_called_once_with([['저']])
+        generate.assert_not_called()
         messages = [c.args[0] for c in ws.send_json.call_args_list]
         self.assertEqual([m['word'] for m in messages if m['type']=='word'],['저'])
+        self.assertEqual([m['sentence'] for m in messages if m['type']=='sentence'],['저'])
 
     async def test_ambiguous_or_brief_gestures_are_discarded(self):
         for predictions in ([],['저'],['저','저'],['저','의견']*3):
@@ -40,7 +41,7 @@ class GestureSegmentTests(unittest.IsolatedAsyncioTestCase):
         flush, generate = self.make_flush()
         ws = SimpleNamespace(send_json=AsyncMock())
         await flush(ws,'session',[['저']]*4,emit=False)
-        generate.assert_called_once_with([['저']])
+        generate.assert_not_called()
         ws.send_json.assert_not_called()
 
     async def test_repeated_gestures_each_emit_once(self):
@@ -48,5 +49,5 @@ class GestureSegmentTests(unittest.IsolatedAsyncioTestCase):
         ws = SimpleNamespace(send_json=AsyncMock())
         for _ in range(2):
             await flush(ws,'session',[['저']]*4,emit=True)
-        self.assertEqual(generate.call_count,2)
+        generate.assert_not_called()
         self.assertEqual(sum(c.args[0]['type']=='word' for c in ws.send_json.call_args_list),2)

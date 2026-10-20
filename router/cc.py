@@ -30,7 +30,7 @@ from util.config import (
     WINDOW_SIZE,
     LABEL2IDX  
 )
-from util.service.cc_service import generate_sentence_from_words, store_final_sentence
+from util.service.cc_service import store_final_sentence
 from util.loadLogger import logger
 from util.gesture_prediction import is_none_label, select_word_candidates
 from util.gesture_preprocessing import prepare_sequence
@@ -295,7 +295,8 @@ async def _flush_words(
     if emit:
         await websocket.send_json({"type": "word", "word": word, "callRoomIdx": call_room_idx})
     logger.info("Flushing %s CC words for session=%s", len(finalized_words), session_id)
-    sentence = await asyncio.to_thread(generate_sentence_from_words, finalized_words)
+    # Sentence rewriting is disabled: display the recognized word verbatim.
+    sentence = word
     await asyncio.to_thread(store_final_sentence, session_id, sentence, finalized_words)
 
     if not sentence:
@@ -542,7 +543,7 @@ from schema.subtitleSchema import GenerateSentenceRequest, GenerateSentenceRespo
 @router.post("/cc/sentence", response_model=GenerateSentenceResponse)
 async def generate_sentence(request: GenerateSentenceRequest) -> GenerateSentenceResponse:
     """
-    텍스트를 받아 word_candidates로 파싱한 후 올라마를 통해 문장 생성
+    텍스트에서 인식 단어를 추출하여 문장화 없이 그대로 반환
     
     요청 예시:
     {
@@ -563,17 +564,9 @@ async def generate_sentence(request: GenerateSentenceRequest) -> GenerateSentenc
             callRoomIdx=request.callRoomIdx
         )
     
-    # 문장 생성
-    try:
-        sentence = await asyncio.to_thread(generate_sentence_from_words, word_candidates)
-        logger.info("Generated sentence: %s", sentence)
-    except Exception as exc:
-        logger.error("Error generating sentence: %s", exc)
-        return GenerateSentenceResponse(
-            sentence="",
-            callRoomIdx=request.callRoomIdx
-        )
-    
+    # Keep the endpoint response compatible, without calling an LLM.
+    sentence = " ".join(candidates[0] for candidates in word_candidates if candidates)
+
     return GenerateSentenceResponse(
         sentence=sentence,
         callRoomIdx=request.callRoomIdx
