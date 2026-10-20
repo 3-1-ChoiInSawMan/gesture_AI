@@ -225,6 +225,14 @@ def _consume_frame(
     valid = _is_valid_frame(frame_vec)
 
     if valid:
+        # Before the first valid observation, invalid input is padded with zeros.
+        # Replace that startup padding with real coordinates before inference;
+        # zero shoulders cannot be normalized. Flags remain False so padding
+        # never counts toward the required number of observed valid frames.
+        if not _is_valid_frame(last_valid_framevec):
+            startup_count = len(seq_buffer)
+            seq_buffer.clear()
+            seq_buffer.extend(frame_vec.copy() for _ in range(startup_count))
         last_valid_framevec = frame_vec.copy()
         seq_buffer.append(frame_vec)
         valid_flag_buffer.append(True)
